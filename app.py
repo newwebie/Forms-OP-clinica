@@ -194,7 +194,7 @@ with tabs[1]:
     st.title("Lista de Apontamentos")
     df = get_sharepoint_file()
     if df.empty:
-        st.info("Nenhum apontamento encontrado!.")
+        st.info("Nenhum apontamento encontrado.")
     else:
         date_cols = ["Data do Apontamento", "Prazo Pra Resolução", "Data de Verificação"]
         for col in date_cols:
