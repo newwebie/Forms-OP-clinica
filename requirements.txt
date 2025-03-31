@@ -4,3 +4,4 @@ plotly==5.24.1
 pymongo==4.11.3
 shareplum==0.5.1
 streamlit==1.39.0
+Office365_REST_Python_Client==2.5.14
