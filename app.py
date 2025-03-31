@@ -2,39 +2,27 @@ import streamlit as st
 import pandas as pd
 import datetime
 import io
-from urllib.parse import urlparse
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
-from office365.runtime.auth.client_credential import ClientCredential
+from office365.runtime.auth.user_credential import UserCredential
 
 # === Configurações do SharePoint ===
-# As credenciais do aplicativo devem estar definidas em st.secrets:
-# st.secrets["sharepoint"]["client_id"]
-# st.secrets["sharepoint"]["client_secret"]
-client_id = st.secrets["sharepoint"]["client_id"]
-client_secret = st.secrets["sharepoint"]["client_secret"]
-site_url = st.secrets["sharepoint"]["site_url"]
-file_name = st.secrets["sharepoint"]["file_name"]
+username = st.secrets["sharepoint"]["username"]
+password = st.secrets["sharepoint"]["password"]
+site_url = st.secrets["sharepoint"]["site_url"]  
+file_name = st.secrets["sharepoint"]["file_name"] 
 
-# Defina a biblioteca de documentos. Altere "Shared Documents" se necessário.
-doc_library = "Shared Documents"
-
-# Extraímos a URL relativa do site
-parsed_url = urlparse(site_url)
-site_path = parsed_url.path.rstrip("/")
-
-# Função para ler o arquivo Excel do SharePoint usando a lib office365 e ClientCredential
+# Função para ler o arquivo Excel do SharePoint
 def get_sharepoint_file():
     try:
-        ctx = ClientContext(site_url).with_credentials(ClientCredential(client_id, client_secret))
-        file_relative_url = f"{site_path}/{doc_library}/{file_name}"
-        response = File.open_binary(ctx, file_relative_url)
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        response = File.open_binary(ctx, file_name)
         return pd.read_excel(io.BytesIO(response.content))
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo no SharePoint: {e}")
         return pd.DataFrame()
 
-# Função para atualizar (fazer upload) do arquivo Excel no SharePoint usando a lib office365 e ClientCredential
+# Função para atualizar (fazer upload) do arquivo Excel no SharePoint
 def update_sharepoint_file(df):
     try:
         # Converte o DataFrame para Excel em memória
@@ -43,10 +31,12 @@ def update_sharepoint_file(df):
         output.seek(0)
         file_content = output.read()
         
-        ctx = ClientContext(site_url).with_credentials(ClientCredential(client_id, client_secret))
-        folder_url = f"{site_path}/{doc_library}"
-        target_folder = ctx.web.get_folder_by_server_relative_url(folder_url)
-        target_folder.upload_file(file_name, file_content).execute_query()
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        # Extrai o caminho da pasta e o nome do arquivo
+        folder_path = "/".join(file_name.split("/")[:-1])
+        file_name_only = file_name.split("/")[-1]
+        target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+        target_folder.upload_file(file_name_only, file_content).execute_query()
         st.success("Apontamento salvo com sucesso!")
     except Exception as e:
         st.error(f"Erro ao salvar o arquivo no SharePoint: {e}")
@@ -194,7 +184,7 @@ with tabs[1]:
     st.title("Lista de Apontamentos")
     df = get_sharepoint_file()
     if df.empty:
-        st.info("Nenhum apontamento encontrado.")
+        st.info("Nenhum apontamento encontrado!")
     else:
         date_cols = ["Data do Apontamento", "Prazo Pra Resolução", "Data de Verificação"]
         for col in date_cols:
