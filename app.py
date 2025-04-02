@@ -10,9 +10,10 @@ from office365.runtime.auth.user_credential import UserCredential
 username = st.secrets["sharepoint"]["username"]
 password = st.secrets["sharepoint"]["password"]
 site_url = st.secrets["sharepoint"]["site_url"]  
-file_name = st.secrets["sharepoint"]["file_name"] 
+file_name = st.secrets["sharepoint"]["file_name"]
+bio_file = st.secrets["sharepoint"]["bio_file"]
 
-# Função para ler o arquivo Excel do SharePoint
+# Função para ler o arquivo Excel do SharePoint (Apontamentos)
 def get_sharepoint_file():
     try:
         ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
@@ -20,6 +21,16 @@ def get_sharepoint_file():
         return pd.read_excel(io.BytesIO(response.content))
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo no SharePoint: {e}")
+        return pd.DataFrame()
+
+# Função para ler o arquivo CSV do SharePoint (Estudos / Códigos de Estudo)
+def get_sharepoint_file_estudos_csv():
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        response = File.open_binary(ctx, bio_file)
+        return pd.read_csv(io.BytesIO(response.content))
+    except Exception as e:
+        st.error(f"Erro ao acessar o arquivo CSV de estudos no SharePoint: {e}")
         return pd.DataFrame()
 
 # Função para atualizar (fazer upload) do arquivo Excel no SharePoint
@@ -39,22 +50,12 @@ def update_sharepoint_file(df):
     except Exception as e:
         st.error(f"Erro ao salvar o arquivo no SharePoint: {e}")
 
-# Função para ler o CSV com os códigos de estudo
-def get_study_codes(csv_path):
-    try:
-        df = pd.read_csv(csv_path)
-        return df
-    except Exception as e:
-        st.error(f"Erro ao carregar CSV: {e}")
-        return pd.DataFrame()
-
 # Inicializa a variável de sessão para armazenar o nome da pesquisa
 if "research_name" not in st.session_state:
     st.session_state["research_name"] = ""
 
-# Caminho para o CSV com as colunas "NUMERO_DO_PROTOCOLO" e "NOME_DA_PESQUISA"
-csv_path = r"C:\Users\susanna.bernardes\OneDrive - Synvia Group\PROJETO_DASHBOARD\ESTUDOS_BIO.csv"  # Atualize este caminho conforme necessário
-df_study = get_study_codes(csv_path)
+# Carrega os códigos de estudo a partir do arquivo CSV
+df_study = get_sharepoint_file_estudos_csv()
 
 # === Layout com duas abas: Formulário e Lista de Apontamentos ===
 tabs = st.tabs(["Formulário", "Lista de Apontamentos"])
@@ -62,9 +63,8 @@ tabs = st.tabs(["Formulário", "Lista de Apontamentos"])
 with tabs[0]:
     st.title("Criar Apontamento")
     
-    # Se o CSV for carregado, atualiza o nome da pesquisa conforme o código selecionado
     if df_study.empty:
-        st.error("CSV não carregado. Verifique o caminho do arquivo.")
+        st.error("Arquivo CSV de estudos não carregado. Verifique o caminho do arquivo.")
     else:
         protocol_options = ["Digite o codigo do estudo"] + df_study["NUMERO_DO_PROTOCOLO"].tolist()
         selected_protocol = st.selectbox("Código do Estudo", options=protocol_options, key="selected_cod")
