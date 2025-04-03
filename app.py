@@ -158,7 +158,7 @@ with tabs[0]:
             elif status == "VERIFICANDO" and verificador_nome.strip() == "":
                 st.error("Por favor, preencha o campo 'Nome de quem está verificando'.")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
-                st.error("Por favor, preencha o campo 'Justificativa'.")
+                st.error("Por favor, preencha o campo 'Justificativa'!")
             else:
                 novo_apontamento = {
                     "Código do Estudo": selected_protocol,
