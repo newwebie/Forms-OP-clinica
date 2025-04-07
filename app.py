@@ -203,10 +203,12 @@ with tabs[0]:
                     # Recarrega os dados e atualiza o session_state
                     st.session_state["df_apontamentos"] = get_sharepoint_file()
                     st.success("Apontamento enviado com sucesso!")
+                    
+                    
 
 with tabs[1]:
     st.title("Lista de Apontamentos")
-    df = st.session_state["df_apontamentos"]
+    df = get_sharepoint_file()
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
     else:
