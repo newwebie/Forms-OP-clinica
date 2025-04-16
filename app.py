@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import datetime
+from datetime import datetime
 import io
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
@@ -47,7 +47,8 @@ def update_sharepoint_file(df):
         file_name_only = file_name.split("/")[-1]
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
-        st.success("Apontamento salvo com sucesso!")
+        st.cache_data.clear()
+        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
     except Exception as e:
         st.error(f"Erro ao salvar o arquivo no SharePoint: {e}")
 
@@ -224,11 +225,23 @@ with tabs[0]:
 with tabs[1]:
     st.title("Lista de Apontamentos")
     df = get_sharepoint_file()
-    
+
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
     else:
+        # Garante que as colunas de atualização existam
+        for col in ["Atualização", "Responsável Atualização"]:
+            if col not in df.columns:
+                df[col] = ""
 
+        # Campos de input
+        st.markdown("### Informações da Atualização")
+        responsavel = st.text_input("Responsável pela atualização", placeholder="Digite seu nome completo")
+        justificativa = st.text_area("Justificativa", placeholder="Preencher se for o novo Status for 'NÃO APLICÁVEL'")
+
+        st.divider()
+
+        # Configuração do editor
         columns_config = {}
         for col in df.columns:
             if col == "Status":
@@ -245,17 +258,42 @@ with tabs[1]:
                 )
             else:
                 columns_config[col] = st.column_config.TextColumn(col, disabled=True)
-        
-        # Exibe o data editor com a configuração definida
+
         df_editado = st.data_editor(
             df,
             column_config=columns_config,
-            num_rows="fixed",  # Permite somente as linhas existentes; use "dynamic" para permitir linhas novas
+            num_rows="fixed",
             key="data_editor"
         )
-        
-        # Botão para submeter as edições
-        if st.button("Submeter Edições"):
-            update_sharepoint_file(df_editado)
-            st.success("Alterações salvas com sucesso!")
 
+        if st.button("Submeter Edições"):
+            if not responsavel.strip():
+                st.warning("Por favor, preencha o nome do responsável pela atualização.")
+            else:
+                df_atualizado = df.copy()
+                alterado = False
+                erro_verificando = False
+                erro_justificativa = False
+
+                for i in range(len(df)):
+                    status_original = df.loc[i, "Status"]
+                    status_novo = df_editado.loc[i, "Status"]
+
+                    if status_novo != status_original:
+                        alterado = True
+                        df_atualizado.loc[i, "Status"] = status_novo
+                        df_atualizado.loc[i, "Atualização"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        df_atualizado.loc[i, "Responsável Atualização"] = responsavel
+
+                        if status_novo == "NÃO APLICÁVEL" and not justificativa.strip():
+                            erro_justificativa = True
+
+                # Mensagens de erro específicas
+                if not alterado:
+                    st.warning("Nenhuma alteração foi feita nos status. Nada será submetido.")
+                elif erro_justificativas:
+                    if erro_justificativa:
+                        st.error("Por favor, preencha o campo 'Justificativa' para os apontamentos marcados como 'NÃO APLICÁVEL'.")
+                else:
+                    update_sharepoint_file(df_atualizado)
+                    st.success("Alterações salvas com sucesso!")
