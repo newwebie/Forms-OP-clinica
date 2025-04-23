@@ -156,8 +156,8 @@ with tabs[0]:
         ], key="status", on_change=update_status_fields)
         
         if st.session_state["enable_verificador"]:
-            verificador_nome = st.text_input("Responsável pela verificação", key="verificador_nome")
-            verificador_data = st.date_input("Data de início da verificação", format="DD/MM/YYYY", key="verificador_data")
+            verificador_nome = st.text_input("Responsável Pela Verificação", key="verificador_nome")
+            verificador_data = st.date_input("Data de Início da Verificação", format="DD/MM/YYYY", key="verificador_data")
             justificativa = ""
         elif st.session_state["enable_justificativa"]:
             justificativa = st.text_input("Justificativa", key="justificativa")
@@ -196,7 +196,7 @@ with tabs[0]:
                     "Apontamento": st.session_state["apontamento"],
                     "Status": st.session_state["status"],
                     "Verificador": st.session_state.get("verificador_nome", ""),
-                    "Data de Verificação": st.session_state.get("verificador_data", None),
+                    "Data Inicío Verificação": st.session_state.get("verificador_data", None),
                     "Justificativa": st.session_state.get("justificativa", ""),
                     "Responsável Pela Correção": "",
                     "Plantão": "",
@@ -233,7 +233,7 @@ with tabs[1]:
         st.info("Nenhum apontamento encontrado!")
     else:
         # Garante que as colunas de atualização existam
-        for col in ["Atualização", "Responsável Atualização"]:
+        for col in ["Data Atualização", "Responsável Atualização"]:
             if col not in df.columns:
                 df[col] = ""
 
@@ -253,7 +253,7 @@ with tabs[1]:
                     options=["REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"],
                     disabled=False
                 )
-            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data de Verificação"]:
+            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Inicío Verificação"]:
                 columns_config[col] = st.column_config.DateColumn(
                     col,
                     disabled=True,
@@ -283,19 +283,20 @@ with tabs[1]:
                     status_novo = df_editado.loc[i, "Status"]
 
                     if status_novo != status_original:
+                        data_atual = datetime.date.today()
+                        data_formatada = data_atual.strftime("%d/%m/%Y")
                         alterado = True
                         df_atualizado.loc[i, "Status"] = status_novo
-                        df_atualizado.loc[i, "Atualização"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        df_atualizado.loc[i, "Data Atualização"] = data_formatada
                         df_atualizado.loc[i, "Responsável Atualização"] = responsavel
+                        df_atualizado.loc[i, "Justificativa"] = justificativa
 
                         if status_novo == "NÃO APLICÁVEL" and not justificativa.strip():
                             erro_justificativa = True
 
-                # Mensagens de erro específicas
                 if not alterado:
                     st.warning("Nenhuma alteração foi feita nos status. Nada será submetido.")
-                elif erro_justificativas:
-                    if erro_justificativa:
+                elif erro_justificativa:
                         st.error("Por favor, preencha o campo 'Justificativa' para os apontamentos marcados como 'NÃO APLICÁVEL'.")
                 else:
                     update_sharepoint_file(df_atualizado)
