@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import datetime
 import io
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
@@ -179,10 +179,13 @@ with tabs[0]:
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
             else:
+                data_atual = datetime.date.today()
+                data_formatada = data_atual.strftime("%d/%m/%Y")
+
                 novo_apontamento = {
                     "Código do Estudo": selected_protocol,
                     "Nome da Pesquisa": research_name,
-                    "Data do Apontamento": datetime.date.today(),
+                    "Data do Apontamento": data_formatada,
                     "Responsável Pelo Apontamento": responsavel,
                     "Origem Do Apontamento": st.session_state["origem"],
                     "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
