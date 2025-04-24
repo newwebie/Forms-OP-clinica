@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import datetime
+from datetime import datetime
 import io
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
@@ -179,13 +179,12 @@ with tabs[0]:
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
             else:
-                data_atual = datetime.date.today()
-                data_formatada = data_atual.strftime("%d/%m/%Y")
+                data_atual = datetime.now()
 
                 novo_apontamento = {
                     "Código do Estudo": selected_protocol,
                     "Nome da Pesquisa": research_name,
-                    "Data do Apontamento": data_formatada,
+                    "Data do Apontamento": data_atual,
                     "Responsável Pelo Apontamento": responsavel,
                     "Origem Do Apontamento": st.session_state["origem"],
                     "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
@@ -253,7 +252,7 @@ with tabs[1]:
                     options=["REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"],
                     disabled=False
                 )
-            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Inicío Verificação"]:
+            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização","Data Inicío Verificação"]:
                 columns_config[col] = st.column_config.DateColumn(
                     col,
                     disabled=True,
@@ -283,11 +282,10 @@ with tabs[1]:
                     status_novo = df_editado.loc[i, "Status"]
 
                     if status_novo != status_original:
-                        data_atual = datetime.date.today()
-                        data_formatada = data_atual.strftime("%d/%m/%Y")
+                        data_atual = datetime.now()
                         alterado = True
                         df_atualizado.loc[i, "Status"] = status_novo
-                        df_atualizado.loc[i, "Data Atualização"] = data_formatada
+                        df_atualizado.loc[i, "Data Atualização"] = data_atual
                         df_atualizado.loc[i, "Responsável Atualização"] = responsavel
                         df_atualizado.loc[i, "Justificativa"] = justificativa
 
