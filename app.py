@@ -255,9 +255,12 @@ with tabs[1]:
 
         # Campos de input
         st.markdown("### Informações da Atualização")
-        responsavel = st.text_input("Responsável pela atualização", placeholder="Digite seu nome completo")
+        responsavel_options = ["Responsável pela Atualização"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+        responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_justificativa")
         justificativa = st.text_area("Justificativa", placeholder="Preencher se for o novo Status for 'NÃO APLICÁVEL'")
+        
 
+        
         st.divider()
 
         # Configuração do editor
