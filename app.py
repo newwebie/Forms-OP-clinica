@@ -112,7 +112,7 @@ with tabs[0]:
             research_name = ""
         st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
         
-        responsavel_options = ["Responsável pelo Apontamento"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+        responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
         responsavel = st.selectbox("Responsável pelo Apontamento", options=responsavel_options, key="responsavel")
         
         origem = st.selectbox(
@@ -255,7 +255,7 @@ with tabs[1]:
 
         # Campos de input
         st.markdown("### Informações da Atualização")
-        responsavel_options = ["Responsável pela Atualização"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+        responsavel_options = ["Selecione um Colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
         responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_justificativa")
         justificativa = st.text_area("Justificativa", placeholder="Preencher se for o novo Status for 'NÃO APLICÁVEL'")
         
