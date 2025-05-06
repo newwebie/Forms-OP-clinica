@@ -12,6 +12,7 @@ password = st.secrets["sharepoint"]["password"]
 site_url = st.secrets["sharepoint"]["site_url"]
 file_name = st.secrets["sharepoint"]["file_name"]
 bio_file = st.secrets["sharepoint"]["bio_file"]
+colaboradores = st.secrets["sharepoint"]["colaboradores"]
 
 # Função para ler o arquivo Excel (Apontamentos) do SharePoint com cache
 @st.cache_data
@@ -35,6 +36,18 @@ def get_sharepoint_file_estudos_csv():
         st.error(f"Erro ao acessar o arquivo CSV de estudos no SharePoint: {e}")
         return pd.DataFrame()
 
+@st.cache_data
+def colaboradores_excel():
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        response = File.open_binary(ctx, colaboradores)
+        xls = pd.ExcelFile(io.BytesIO(response.content))
+        colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
+        return colaboradores_df
+    except Exception as e:
+        st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
+        return pd.DataFrame()
+
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
 def update_sharepoint_file(df):
     try:
@@ -54,6 +67,8 @@ def update_sharepoint_file(df):
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
+
+colaboradores_df  = colaboradores_excel()
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
@@ -97,7 +112,9 @@ with tabs[0]:
             research_name = ""
         st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
         
-        responsavel = st.text_input("Responsável", key="responsavel")
+        responsavel_options = ["Responsável pelo Apontamento"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+        responsavel = st.selectbox("Responsável pelo Apontamento", options=responsavel_options, key="responsavel")
+        
         origem = st.selectbox(
             "Origem Do Apontamento", 
             ["Documentação Clínica", "Excelência Operacional", "Operações Clínicas", 
