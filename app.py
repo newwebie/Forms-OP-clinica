@@ -63,7 +63,19 @@ def update_sharepoint_file(df):
         st.cache_data.clear()
         st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
     except Exception as e:
-        st.error(f"Erro ao salvar o arquivo no SharePoint: {e}")
+        locked = (
+            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+            or "-2147018894" in str(e)                       # SPFileLockException
+            or "lock" in str(e).lower()                      # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
+                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
+                )
+        else:
+            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
+
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
@@ -112,8 +124,7 @@ with tabs[0]:
             research_name = ""
         st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
         
-        responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
-        responsavel = st.selectbox("Responsável pelo Apontamento", options=responsavel_options, key="responsavel")
+        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento")
         
         origem = st.selectbox(
             "Origem Do Apontamento", 
@@ -166,7 +177,11 @@ with tabs[0]:
         st.text('Baixo: O apontamento tem rastreabilidade e não gera impacto no RC \nMédio: O apontamento tem rastreabilidade e gera impacto no RC, precisa de correção em sistema \nAlta: O apontamento não tem rastreabilidade')
         prazo = st.date_input("Prazo Para Resolução", format="DD/MM/YYYY", key="prazo")
         apontamento = st.text_area("Apontamento", key="apontamento")
+
         
+        responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+        correcao = st.selectbox("Responsável pela Correção", options=responsavel_options, key="responsavel")
+
         # Campo de Status com callback (supondo que a função update_status_fields esteja definida)
         status = st.selectbox("Status", [
             "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
@@ -214,7 +229,7 @@ with tabs[0]:
                     "Verificador": st.session_state.get("verificador_nome", ""),
                     "Data Inicío Verificação": st.session_state.get("verificador_data", None),
                     "Justificativa": st.session_state.get("justificativa", ""),
-                    "Responsável Pela Correção": "",
+                    "Responsável Pela Correção": correcao,
                     "Plantão": "",
                     "Departamento": "",
                     "Tempo de casa": ""
@@ -238,7 +253,6 @@ with tabs[0]:
                     update_sharepoint_file(df)
                     st.cache_data.clear()  # Limpa o cache para recarregar os dados atualizados
                     st.session_state["df_apontamentos"] = get_sharepoint_file()
-                    st.success("Apontamento enviado com sucesso!")
                     
 
 with tabs[1]:
