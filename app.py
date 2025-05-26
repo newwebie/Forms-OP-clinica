@@ -79,7 +79,7 @@ def update_sharepoint_file(df):
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
-
+df = get_sharepoint_file()
 colaboradores_df  = colaboradores_excel()
 
 # Inicializar o DataFrame de apontamentos no session_state
@@ -88,23 +88,46 @@ if "df_apontamentos" not in st.session_state:
 
 # Configurar session_state para campos condicionais
 if "status" not in st.session_state:
-    st.session_state["status"] = "REALIZADO DURANTE A CONDUÇÃO"
+    st.session_state["status"] = ""
 if "enable_verificador" not in st.session_state:
     st.session_state["enable_verificador"] = False
-if "enable_justificativa" not in st.session_state:
-    st.session_state["enable_justificativa"] = False
+if "enable_data_resolucao" not in st.session_state:
+    st.session_state["enable_data_resolucao"] = False
+if "enable_nao_aplicavel" not in st.session_state:
+    st.session_state["enable_nao_aplicavel"] = False
+
+
 
 def update_status_fields():
     s = st.session_state["status"]
+
     if s == "VERIFICANDO":
-        st.session_state["enable_verificador"] = True
-        st.session_state["enable_justificativa"] = False
+        st.session_state["enable_verificador"]   = True
+        st.session_state["enable_data_resolucao"] = False
+        st.session_state["enable_nao_aplicavel"] = False
+
+    elif s == "REALIZADO": 
+        st.session_state["enable_verificador"]   = False
+        st.session_state["enable_data_resolucao"] = True
+        st.session_state["enable_nao_aplicavel"] = False
+    
     elif s == "NÃO APLICÁVEL":
-        st.session_state["enable_verificador"] = False
-        st.session_state["enable_justificativa"] = True
-    else:
-        st.session_state["enable_verificador"] = False
-        st.session_state["enable_justificativa"] = False
+        st.session_state["enable_verificador"]   = False
+        st.session_state["enable_data_resolucao"] = False
+        st.session_state["enable_nao_aplicavel"] = True
+
+    else:                                       # PENDENTE, REALIZADO DURANTE A CONDUÇÃO …
+        st.session_state["enable_verificador"]   = False
+        st.session_state["enable_data_resolucao"] = False
+        st.session_state["enable_nao_aplicavel"] = False
+
+def pegar_dados_colab(nome_colab: str, df: pd.DataFrame):
+    linha = df.loc[df["Nome Completo do Profissional"] == nome_colab]
+    if linha.empty:
+        return "", ""
+    lin = linha.iloc[0]
+    return lin["Plantão"], lin["Status do Profissional"]
+
 
 # Início da tela principal
 tabs = st.tabs(["Formulário", "Lista de Apontamentos"])
@@ -122,9 +145,9 @@ with tabs[0]:
             research_name = df_study.loc[df_study["NUMERO_DO_PROTOCOLO"] == selected_protocol, "NOME_DA_PESQUISA"].iloc[0]
         else:
             research_name = ""
-        st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
+        st.text_input("Nome da Pesquisa", value=research_name, disabled=True, icon="🔍")
         
-        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento")
+        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento", icon="👤")
         
         origem = st.selectbox(
             "Origem Do Apontamento", 
@@ -182,6 +205,10 @@ with tabs[0]:
         responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
         correcao = st.selectbox("Responsável pela Correção", options=responsavel_options, key="responsavel")
 
+        plantao, status_prof = pegar_dados_colab(correcao, colaboradores_df)
+
+
+
         # Campo de Status com callback (supondo que a função update_status_fields esteja definida)
         status = st.selectbox("Status", [
             "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
@@ -191,14 +218,20 @@ with tabs[0]:
             verificador_nome = st.text_input("Responsável Pela Verificação", key="verificador_nome")
             verificador_data = st.date_input("Data de Início da Verificação", format="DD/MM/YYYY", key="verificador_data")
             justificativa = ""
-        elif st.session_state["enable_justificativa"]:
+        elif st.session_state["enable_nao_aplicavel"]:
             justificativa = st.text_input("Justificativa", key="justificativa")
+            resolucao = st.date_input("Data da resolução", format="DD/MM/YYYY")
             verificador_nome = ""
             verificador_data = None
+        elif st.session_state["enable_data_resolucao"]:
+            resolucao = st.date_input("Data da resolução", format="DD/MM/YYYY")
+
+
         else:
             verificador_nome = ""
             verificador_data = None
             justificativa = ""
+            resolucao = None
         
         submit = st.button("Enviar")
         
@@ -210,6 +243,9 @@ with tabs[0]:
                 st.error("Por favor, preencha o campo 'Responsável pela verificação'.")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
+            elif responsavel == "Selecione um colaborador":
+                st.warning("Por favor, selecione o colaborador responsável antes de salvar.")
+                st.stop()
             else:
                 data_atual = datetime.now()
 
@@ -230,9 +266,10 @@ with tabs[0]:
                     "Data Inicío Verificação": st.session_state.get("verificador_data", None),
                     "Justificativa": st.session_state.get("justificativa", ""),
                     "Responsável Pela Correção": correcao,
-                    "Plantão": "",
+                    "Data Resolução": resolucao,
+                    "Plantão": plantao,
                     "Departamento": "",
-                    "Tempo de casa": ""
+                    "Tempo de casa": status_prof
                 }
                 
                 df = st.session_state["df_apontamentos"]
@@ -256,80 +293,131 @@ with tabs[0]:
                     
 
 with tabs[1]:
+    # Inicializa session state
+    if "mostrar_campos_finais" not in st.session_state:
+        st.session_state.mostrar_campos_finais = False
+    if "indices_alterados" not in st.session_state:
+        st.session_state.indices_alterados = []
+    if "df_atualizado" not in st.session_state:
+        st.session_state.df_atualizado = None
+
     st.title("Lista de Apontamentos")
-    df = get_sharepoint_file()
 
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
     else:
+        # Cria cópia filtrada para edição
+        df_filtrado = df.copy()
+        opcoes_estudos = ["Todos"] + sorted(df["Nome da Pesquisa"].dropna().unique().tolist())
+        estudo_selecionado = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
+
+        if estudo_selecionado != "Todos":
+            df_filtrado = df[df["Nome da Pesquisa"] == estudo_selecionado]
+
         # Garante que as colunas de atualização existam
-        for col in ["Data Atualização", "Responsável Atualização"]:
+        for col in ["Data Atualização", "Responsável Atualização", "Data de Conclusão", "Justificativa"]:
             if col not in df.columns:
                 df[col] = ""
+            if col not in df_filtrado.columns:
+                df_filtrado[col] = ""
 
-        # Campos de input
-        st.markdown("### Informações da Atualização")
-        responsavel_options = ["Selecione um Colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
-        responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_justificativa")
-        justificativa = st.text_area("Justificativa", placeholder="Preencher se for o novo Status for 'NÃO APLICÁVEL'")
-        
-
-        
-        st.divider()
-
-        # Configuração do editor
+        # Editor configurado
         columns_config = {}
-        for col in df.columns:
+        for col in df_filtrado.columns:
             if col == "Status":
                 columns_config[col] = st.column_config.SelectboxColumn(
                     "Status",
                     options=["REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"],
                     disabled=False
                 )
-            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização","Data Inicío Verificação"]:
-                columns_config[col] = st.column_config.DateColumn(
-                    col,
-                    disabled=True,
-                    format="DD/MM/YYYY"
-                )
+            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização", "Data Inicío Verificação", "Data Resolução"]:
+                columns_config[col] = st.column_config.DateColumn(col, disabled=True, format="DD/MM/YYYY")
             else:
                 columns_config[col] = st.column_config.TextColumn(col, disabled=True)
 
         df_editado = st.data_editor(
-            df,
+            df_filtrado,
             column_config=columns_config,
             num_rows="fixed",
             key="data_editor"
         )
 
-        if st.button("Submeter Edições"):
-            if not responsavel.strip():
-                st.warning("Por favor, preencha o nome do responsável pela atualização.")
-            else:
-                df_atualizado = df.copy()
+        if not st.session_state.mostrar_campos_finais:
+            if st.button("Status modificados"):
                 alterado = False
-                erro_verificando = False
-                erro_justificativa = False
+                indices_alterados = []
+                df_atualizado = df.copy()  # importante: manter df completo para atualizar
 
-                for i in range(len(df)):
-                    status_original = df.loc[i, "Status"]
-                    status_novo = df_editado.loc[i, "Status"]
+                for i in range(len(df_filtrado)):
+                    status_original = df_filtrado.iloc[i]["Status"]
+                    status_novo = df_editado.iloc[i]["Status"]
 
                     if status_novo != status_original:
-                        data_atual = datetime.now()
                         alterado = True
-                        df_atualizado.loc[i, "Status"] = status_novo
-                        df_atualizado.loc[i, "Data Atualização"] = data_atual
-                        df_atualizado.loc[i, "Responsável Atualização"] = responsavel
-                        df_atualizado.loc[i, "Justificativa"] = justificativa
+                        idx_original = df_filtrado.index[i]
+                        indices_alterados.append(idx_original)
 
-                        if status_novo == "NÃO APLICÁVEL" and not justificativa.strip():
-                            erro_justificativa = True
+                        df.loc[idx_original, "Status"] = status_novo
+                        df.loc[idx_original, "Data Atualização"] = datetime.now()
 
                 if not alterado:
-                    st.warning("Nenhuma alteração foi feita nos status. Nada será submetido.")
-                elif erro_justificativa:
-                        st.error("Por favor, preencha o campo 'Justificativa' para os apontamentos marcados como 'NÃO APLICÁVEL'.")
+                    st.warning("Nenhuma alteração de status detectada.")
                 else:
-                    update_sharepoint_file(df_atualizado)
-                    st.success("Alterações salvas com sucesso!")
+                    st.session_state.mostrar_campos_finais = True
+                    st.session_state.indices_alterados = indices_alterados
+                    st.session_state.df_atualizado = df
+                    st.rerun()
+
+        # Campos obrigatórios + submissão
+        if st.session_state.mostrar_campos_finais:
+            df = st.session_state.df_atualizado
+            indices_alterados = st.session_state.indices_alterados
+            linhas_faltando = []
+
+            st.markdown("### Preencha os campos obrigatórios")
+
+            for idx in indices_alterados:
+                status_novo = df.loc[idx, "Status"]
+
+                if status_novo in ["REALIZADO", "NÃO APLICÁVEL"]:
+                    key_data = f"data_conclusao_{idx}"
+                    data_conclusao = st.date_input(
+                        f"Apontamento ID {idx} - Data de Resolução", key=key_data, format="DD/MM/YYYY"
+                    )
+                    st.markdown(f"------------------")
+                    if not data_conclusao:
+                        linhas_faltando.append(f"[ID {idx}] Data de Conclusão")
+                    else:
+                        df.loc[idx, "Data Resolução"] = data_conclusao
+
+                if status_novo == "NÃO APLICÁVEL":
+                    key_just = f"justificativa_{idx}"
+                    justificativa = st.text_area(
+                        f"Apontamento ID {idx} - Justificativa obrigatória:", key=key_just
+                    )
+                    if not justificativa.strip():
+                        linhas_faltando.append(f"[ID {idx}] Justificativa")
+                    else:
+                        df.loc[idx, "Justificativa"] = justificativa
+
+            responsavel_options = ["Selecione um Colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+            responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_final")
+
+            if st.button("Submeter mudanças"):
+                if linhas_faltando:
+                    st.error("Campos obrigatórios pendentes:\n\n" + "\n".join(linhas_faltando))
+                elif responsavel == "Selecione um Colaborador":
+                    st.warning("Por favor, selecione um responsável!")
+                else:
+                    for idx in indices_alterados:
+                        df.loc[idx, "Responsável Atualização"] = responsavel
+
+                    update_sharepoint_file(df)
+                    st.toast("Alterações salvas com sucesso!")
+
+                    # Reset estado
+                    st.session_state.mostrar_campos_finais = False
+                    st.session_state.indices_alterados = []
+                    st.session_state.df_atualizado = None
+                    st.rerun()
+
