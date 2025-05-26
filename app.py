@@ -61,7 +61,7 @@ def update_sharepoint_file(df):
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
         st.cache_data.clear()
-        st.toast("Mudanças salvas com sucesso!", icon="✅")
+        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
     except Exception as e:
         locked = (
             getattr(e, "response_status", None) == 423        # HTTP 423 Locked
@@ -145,9 +145,9 @@ with tabs[0]:
             research_name = df_study.loc[df_study["NUMERO_DO_PROTOCOLO"] == selected_protocol, "NOME_DA_PESQUISA"].iloc[0]
         else:
             research_name = ""
-        st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
+        st.text_input("Nome da Pesquisa", value=research_name, disabled=True, icon="🔍")
         
-        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento")
+        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento", icon="👤")
         
         origem = st.selectbox(
             "Origem Do Apontamento", 
