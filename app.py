@@ -145,9 +145,9 @@ with tabs[0]:
             research_name = df_study.loc[df_study["NUMERO_DO_PROTOCOLO"] == selected_protocol, "NOME_DA_PESQUISA"].iloc[0]
         else:
             research_name = ""
-        st.text_input("Nome da Pesquisa", value=research_name, disabled=True, icon="🔍")
+        st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
         
-        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento", icon="👤")
+        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento")
         
         origem = st.selectbox(
             "Origem Do Apontamento", 
