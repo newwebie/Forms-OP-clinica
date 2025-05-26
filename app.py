@@ -61,7 +61,7 @@ def update_sharepoint_file(df):
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
         st.cache_data.clear()
-        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
+        st.toast("Mudanças salvas com sucesso!", icon="✅")
     except Exception as e:
         locked = (
             getattr(e, "response_status", None) == 423        # HTTP 423 Locked
@@ -289,7 +289,7 @@ with tabs[0]:
                     df = pd.concat([df, novo_df], ignore_index=True)
                     update_sharepoint_file(df)
                     st.cache_data.clear()  # Limpa o cache para recarregar os dados atualizados
-                    st.session_state["df_apontamentos"] = get_sharepoint_file()
+                    st.rerun()
                     
 
 with tabs[1]:
