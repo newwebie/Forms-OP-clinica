@@ -321,6 +321,13 @@ with tabs[1]:
             if col not in df_filtrado.columns:
                 df_filtrado[col] = ""
 
+        # Converte colunas de data para datetime64[ns]
+        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização", 
+                        "Data Inicío Verificação", "Data Resolução"]
+        for col in colunas_data:
+            if col in df_filtrado.columns:
+                df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors='coerce')
+
         # Editor configurado
         columns_config = {}
         for col in df_filtrado.columns:
@@ -330,7 +337,7 @@ with tabs[1]:
                     options=["REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"],
                     disabled=False
                 )
-            elif col in ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização", "Data Inicío Verificação", "Data Resolução"]:
+            elif col in colunas_data:
                 columns_config[col] = st.column_config.DateColumn(col, disabled=True, format="DD/MM/YYYY")
             else:
                 columns_config[col] = st.column_config.TextColumn(col, disabled=True)
@@ -341,6 +348,7 @@ with tabs[1]:
             num_rows="fixed",
             key="data_editor"
         )
+
 
         if not st.session_state.mostrar_campos_finais:
             if st.button("Status modificados"):
