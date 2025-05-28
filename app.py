@@ -61,7 +61,7 @@ def update_sharepoint_file(df):
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
         st.cache_data.clear()
-        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
+        st.success("Mudanças submetidas com sucesso! Recarregue a pagina para ver as mudanças")
     except Exception as e:
         locked = (
             getattr(e, "response_status", None) == 423        # HTTP 423 Locked
@@ -130,9 +130,18 @@ def pegar_dados_colab(nome_colab: str, df: pd.DataFrame):
 
 
 # Início da tela principal
-tabs = st.tabs(["Formulário", "Lista de Apontamentos"])
+tab_names = ["Formulário", "Lista de Apontamentos"]
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = tab_names[0]
 
-with tabs[0]:
+tab_option = st.radio(
+    label="Navegação",  
+    options=tab_names,
+    horizontal=True,
+    key="active_tab",
+)
+
+if tab_option == "Formulário":
     st.title("Criar Apontamento")
     
     if df_study.empty:
@@ -288,11 +297,9 @@ with tabs[0]:
                     novo_df = pd.DataFrame([novo_apontamento])
                     df = pd.concat([df, novo_df], ignore_index=True)
                     update_sharepoint_file(df)
-                    st.cache_data.clear()  # Limpa o cache para recarregar os dados atualizados
-                    st.rerun()
                     
 
-with tabs[1]:
+elif tab_option == "Lista de Apontamentos":
     # Inicializa session state
     if "mostrar_campos_finais" not in st.session_state:
         st.session_state.mostrar_campos_finais = False
@@ -308,26 +315,25 @@ with tabs[1]:
     else:
         # Cria cópia filtrada para edição
         df_filtrado = df.copy()
-        opcoes_estudos = ["Todos"] + sorted(df["Nome da Pesquisa"].dropna().unique().tolist())
+        opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique().tolist())
         estudo_selecionado = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
 
         if estudo_selecionado != "Todos":
-            df_filtrado = df[df["Nome da Pesquisa"] == estudo_selecionado]
+            df_filtrado = df[df["Código do Estudo"] == estudo_selecionado]
 
         # Garante que as colunas de atualização existam
-        for col in ["Data Atualização", "Responsável Atualização", "Data de Conclusão", "Justificativa"]:
+        for col in ["Data Verificação", "Responsável Atualização", "Data de Conclusão", "Justificativa"]:
             if col not in df.columns:
                 df[col] = ""
             if col not in df_filtrado.columns:
                 df_filtrado[col] = ""
 
         # Converte colunas de data para datetime64[ns]
-        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Atualização", 
+        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Verificação", 
                         "Data Inicío Verificação", "Data Resolução"]
         for col in colunas_data:
             if col in df_filtrado.columns:
                 df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors='coerce')
-
         # Editor configurado
         columns_config = {}
         for col in df_filtrado.columns:
@@ -366,7 +372,7 @@ with tabs[1]:
                         indices_alterados.append(idx_original)
 
                         df.loc[idx_original, "Status"] = status_novo
-                        df.loc[idx_original, "Data Atualização"] = datetime.now()
+                        df.loc[idx_original, "Data Verificação"] = datetime.now()
 
                 if not alterado:
                     st.warning("Nenhuma alteração de status detectada.")
@@ -387,12 +393,15 @@ with tabs[1]:
             for idx in indices_alterados:
                 status_novo = df.loc[idx, "Status"]
 
+                st.markdown(f"#### Apontamento ID {idx}")
+
                 if status_novo in ["REALIZADO", "NÃO APLICÁVEL"]:
                     key_data = f"data_conclusao_{idx}"
-                    data_conclusao = st.date_input(
-                        f"Apontamento ID {idx} - Data de Resolução", key=key_data, format="DD/MM/YYYY"
+                    data_conclusao = st.date_input("Data de Resolução",
+                        key=key_data,
+                        format="DD/MM/YYYY",
                     )
-                    st.markdown(f"------------------")
+
                     if not data_conclusao:
                         linhas_faltando.append(f"[ID {idx}] Data de Conclusão")
                     else:
@@ -400,15 +409,18 @@ with tabs[1]:
 
                 if status_novo == "NÃO APLICÁVEL":
                     key_just = f"justificativa_{idx}"
-                    justificativa = st.text_area(
-                        f"Apontamento ID {idx} - Justificativa obrigatória:", key=key_just
+                    justificativa = st.text_area("Justificativa obrigatória:", key=key_just
                     )
                     if not justificativa.strip():
                         linhas_faltando.append(f"[ID {idx}] Justificativa")
                     else:
                         df.loc[idx, "Justificativa"] = justificativa
+                
+                st.markdown("---")
 
-            responsavel_options = ["Selecione um Colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
+            #Filtrando o df para aparecer somente a galera de excelencia operacional
+            colaboradores_eo = colaboradores_df[colaboradores_df["Departamento"] == "Excelência Operacional"]
+            responsavel_options = ["Selecione um Colaborador"] + colaboradores_eo["Nome Completo do Profissional"].tolist()
             responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_final")
 
             if st.button("Submeter mudanças"):
@@ -418,7 +430,7 @@ with tabs[1]:
                     st.warning("Por favor, selecione um responsável!")
                 else:
                     for idx in indices_alterados:
-                        df.loc[idx, "Responsável Atualização"] = responsavel
+                        df.loc[idx, "Verificador"] = responsavel
 
                     update_sharepoint_file(df)
                     st.toast("Alterações salvas com sucesso!")
@@ -427,5 +439,3 @@ with tabs[1]:
                     st.session_state.mostrar_campos_finais = False
                     st.session_state.indices_alterados = []
                     st.session_state.df_atualizado = None
-                    st.rerun()
-
