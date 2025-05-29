@@ -79,7 +79,6 @@ def update_sharepoint_file(df):
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
-df = get_sharepoint_file()
 colaboradores_df  = colaboradores_excel()
 
 # Inicializar o DataFrame de apontamentos no session_state
@@ -89,8 +88,6 @@ if "df_apontamentos" not in st.session_state:
 # Configurar session_state para campos condicionais
 if "status" not in st.session_state:
     st.session_state["status"] = ""
-if "enable_verificador" not in st.session_state:
-    st.session_state["enable_verificador"] = False
 if "enable_data_resolucao" not in st.session_state:
     st.session_state["enable_data_resolucao"] = False
 if "enable_nao_aplicavel" not in st.session_state:
@@ -102,31 +99,39 @@ def update_status_fields():
     s = st.session_state["status"]
 
     if s == "VERIFICANDO":
-        st.session_state["enable_verificador"]   = True
-        st.session_state["enable_data_resolucao"] = False
-        st.session_state["enable_nao_aplicavel"] = False
+        st.info("Esse staus só pode ser preenchido pelo Guilherme Silva")
 
     elif s == "REALIZADO": 
-        st.session_state["enable_verificador"]   = False
         st.session_state["enable_data_resolucao"] = True
         st.session_state["enable_nao_aplicavel"] = False
     
     elif s == "NÃO APLICÁVEL":
-        st.session_state["enable_verificador"]   = False
         st.session_state["enable_data_resolucao"] = False
         st.session_state["enable_nao_aplicavel"] = True
 
     else:                                       # PENDENTE, REALIZADO DURANTE A CONDUÇÃO …
-        st.session_state["enable_verificador"]   = False
         st.session_state["enable_data_resolucao"] = False
         st.session_state["enable_nao_aplicavel"] = False
 
-def pegar_dados_colab(nome_colab: str, df: pd.DataFrame):
+def pegar_dados_colab(nome_colab: str, df: pd.DataFrame, campos: list[str]):
+    """
+    Retorna os dados solicitados de um colaborador, baseado nos nomes dos campos.
+
+    Parâmetros:
+        nome_colab (str): Nome do colaborador.
+        df (pd.DataFrame): DataFrame contendo os dados.
+        campos (list[str]): Lista de nomes de colunas a serem retornadas.
+
+    Retorna:
+        tuple: Valores dos campos solicitados, na ordem da lista `campos`.
+    """
     linha = df.loc[df["Nome Completo do Profissional"] == nome_colab]
     if linha.empty:
-        return "", ""
+        return tuple("" for _ in campos)
+    
     lin = linha.iloc[0]
-    return lin["Plantão"], lin["Status do Profissional"]
+    return tuple(lin[campo] if campo in lin else "" for campo in campos)
+
 
 
 # Início da tela principal
@@ -214,7 +219,7 @@ if tab_option == "Formulário":
         responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
         correcao = st.selectbox("Responsável pela Correção", options=responsavel_options, key="responsavel")
 
-        plantao, status_prof = pegar_dados_colab(correcao, colaboradores_df)
+        plantao, status_prof, departamento = pegar_dados_colab(correcao, colaboradores_df, ["Plantão", "Status do Profissional","Departamento"])
 
 
 
@@ -223,23 +228,21 @@ if tab_option == "Formulário":
             "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
         ], key="status", on_change=update_status_fields)
         
-        if st.session_state["enable_verificador"]:
-            verificador_nome = st.text_input("Responsável Pela Verificação", key="verificador_nome")
-            verificador_data = st.date_input("Data de Início da Verificação", format="DD/MM/YYYY", key="verificador_data")
-            justificativa = ""
-        elif st.session_state["enable_nao_aplicavel"]:
+
+        if st.session_state["enable_nao_aplicavel"]:
             justificativa = st.text_input("Justificativa", key="justificativa")
             resolucao = st.date_input("Data da resolução", format="DD/MM/YYYY")
             verificador_nome = ""
             verificador_data = None
         elif st.session_state["enable_data_resolucao"]:
             resolucao = st.date_input("Data da resolução", format="DD/MM/YYYY")
+            justificativa = "N/A"
 
 
         else:
             verificador_nome = ""
             verificador_data = None
-            justificativa = ""
+            justificativa = "N/A"
             resolucao = None
         
         submit = st.button("Enviar")
@@ -272,12 +275,12 @@ if tab_option == "Formulário":
                     "Apontamento": st.session_state["apontamento"],
                     "Status": st.session_state["status"],
                     "Verificador": st.session_state.get("verificador_nome", ""),
-                    "Data Inicío Verificação": st.session_state.get("verificador_data", None),
+                    "Disponibilizado para Verificação": st.session_state.get("verificador_data", None),
                     "Justificativa": st.session_state.get("justificativa", ""),
                     "Responsável Pela Correção": correcao,
                     "Data Resolução": resolucao,
                     "Plantão": plantao,
-                    "Departamento": "",
+                    "Departamento": departamento,
                     "Tempo de casa": status_prof
                 }
                 
@@ -300,6 +303,7 @@ if tab_option == "Formulário":
                     
 
 elif tab_option == "Lista de Apontamentos":
+    df = get_sharepoint_file()
     # Inicializa session state
     if "mostrar_campos_finais" not in st.session_state:
         st.session_state.mostrar_campos_finais = False
@@ -321,16 +325,10 @@ elif tab_option == "Lista de Apontamentos":
         if estudo_selecionado != "Todos":
             df_filtrado = df[df["Código do Estudo"] == estudo_selecionado]
 
-        # Garante que as colunas de atualização existam
-        for col in ["Data Verificação", "Responsável Atualização", "Data de Conclusão", "Justificativa"]:
-            if col not in df.columns:
-                df[col] = ""
-            if col not in df_filtrado.columns:
-                df_filtrado[col] = ""
 
         # Converte colunas de data para datetime64[ns]
-        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Verificação", 
-                        "Data Inicío Verificação", "Data Resolução"]
+        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", 
+                        "Disponibilizado para Verificação", "Data Resolução"]
         for col in colunas_data:
             if col in df_filtrado.columns:
                 df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors='coerce')
@@ -372,7 +370,6 @@ elif tab_option == "Lista de Apontamentos":
                         indices_alterados.append(idx_original)
 
                         df.loc[idx_original, "Status"] = status_novo
-                        df.loc[idx_original, "Data Verificação"] = datetime.now()
 
                 if not alterado:
                     st.warning("Nenhuma alteração de status detectada.")
@@ -403,7 +400,7 @@ elif tab_option == "Lista de Apontamentos":
                     )
 
                     if not data_conclusao:
-                        linhas_faltando.append(f"[ID {idx}] Data de Conclusão")
+                        linhas_faltando.append(f"[ID {idx}] Data de Resolução")
                     else:
                         df.loc[idx, "Data Resolução"] = data_conclusao
 
@@ -433,7 +430,6 @@ elif tab_option == "Lista de Apontamentos":
                         df.loc[idx, "Verificador"] = responsavel
 
                     update_sharepoint_file(df)
-                    st.toast("Alterações salvas com sucesso!")
 
                     # Reset estado
                     st.session_state.mostrar_campos_finais = False
