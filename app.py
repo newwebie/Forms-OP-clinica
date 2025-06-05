@@ -324,6 +324,22 @@ elif tab_option == "Lista de Apontamentos":
 
         if estudo_selecionado != "Todos":
             df_filtrado = df[df["Código do Estudo"] == estudo_selecionado]
+            
+        columns_to_display = [
+            "Status",
+            "Código do Estudo",
+            "Responsável Pela Correção",
+            "Plantão",
+            "Participante",
+            "Período",
+            "Apontamento",
+            "Prazo Para Resolução",
+            "Data Resolução",
+            "Justificativa",
+            "Responsável Pelo Apontamento",
+            "Origem Do Apontamento",
+        ]
+        df_filtrado = df_filtrado[columns_to_display]
 
 
         # Converte colunas de data para datetime64[ns]
