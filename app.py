@@ -61,6 +61,7 @@ def update_sharepoint_file(df):
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
         st.cache_data.clear()
+        st.session_state["df_apontamentos"] = df
         st.success("Mudanças submetidas com sucesso! Recarregue a pagina para ver as mudanças")
     except Exception as e:
         locked = (
@@ -300,10 +301,11 @@ if tab_option == "Formulário":
                     novo_df = pd.DataFrame([novo_apontamento])
                     df = pd.concat([df, novo_df], ignore_index=True)
                     update_sharepoint_file(df)
+                    st.session_state["df_apontamentos"] = df
                     
 
 elif tab_option == "Lista de Apontamentos":
-    df = get_sharepoint_file()
+    df = st.session_state["df_apontamentos"]
     # Inicializa session state
     if "mostrar_campos_finais" not in st.session_state:
         st.session_state.mostrar_campos_finais = False
@@ -393,7 +395,6 @@ elif tab_option == "Lista de Apontamentos":
                     st.session_state.mostrar_campos_finais = True
                     st.session_state.indices_alterados = indices_alterados
                     st.session_state.df_atualizado = df
-                    st.rerun()
 
         # Campos obrigatórios + submissão
         if st.session_state.mostrar_campos_finais:
@@ -446,6 +447,7 @@ elif tab_option == "Lista de Apontamentos":
                         df.loc[idx, "Verificador"] = responsavel
 
                     update_sharepoint_file(df)
+                    st.session_state["df_apontamentos"] = df
 
                     # Reset estado
                     st.session_state.mostrar_campos_finais = False
