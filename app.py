@@ -334,6 +334,7 @@ elif tab_option == "Lista de Apontamentos":
             "Plantão",
             "Participante",
             "Período",
+            "Documento",
             "Apontamento",
             "Prazo Para Resolução",
             "Data Resolução",
@@ -345,8 +346,7 @@ elif tab_option == "Lista de Apontamentos":
 
 
         # Converte colunas de data para datetime64[ns]
-        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", 
-                        "Disponibilizado para Verificação", "Data Resolução"]
+        colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Resolução"]
         for col in colunas_data:
             if col in df_filtrado.columns:
                 df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors='coerce')
