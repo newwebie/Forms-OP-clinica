@@ -334,7 +334,7 @@ elif tab_option == "Lista de Apontamentos":
             "Plantão",
             "Participante",
             "Período",
-            "Documento",
+            "Documentos",
             "Apontamento",
             "Prazo Para Resolução",
             "Data Resolução",
