@@ -220,7 +220,7 @@ if tab_option == "Formulário":
         responsavel_options = ["Selecione um colaborador"] + colaboradores_df["Nome Completo do Profissional"].tolist()
         correcao = st.selectbox("Responsável pela Correção", options=responsavel_options, key="responsavel")
 
-        plantao, status_prof, departamento = pegar_dados_colab(correcao, colaboradores_df, ["Plantão", "Status do Profissional","Departamento"])
+        plantao, status_prof, departamento = pegar_dados_colab(correcao, colaboradores_df, ["Plantão", "Tempo De Casa","Departamento"])
 
 
 
