@@ -205,7 +205,7 @@ if tab_option == "Formulário":
             , key="participante")
              
              
-        periodo = st.selectbox("Período", [
+        periodo = st.selectbox("Período", ["N/A",
             '1° Período', '2° Período', '3° Período',
             '4° Período', '5° Período', '6° Período', '7° Período', 
             '8° Período', '9° Período', '10° Período'
