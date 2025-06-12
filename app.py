@@ -133,7 +133,8 @@ def pegar_dados_colab(nome_colab: str, df: pd.DataFrame, campos: list[str]):
     lin = linha.iloc[0]
     return tuple(lin[campo] if campo in lin else "" for campo in campos)
 
-
+def clear_cache_and_reload():
+    st.cache_data.clear()
 
 # Início da tela principal
 tab_names = ["Formulário", "Lista de Apontamentos"]
@@ -315,6 +316,15 @@ elif tab_option == "Lista de Apontamentos":
         st.session_state.df_atualizado = None
 
     st.title("Lista de Apontamentos")
+
+    col_btn1,*_ = st.columns(6)
+
+    with col_btn1:
+                    st.button(
+                        "🔄  Atualizar",
+                        key="btn_clear_cache",
+                        on_click=clear_cache_and_reload
+                    )
 
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
