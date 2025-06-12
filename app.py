@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import io
+import time
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
 from office365.runtime.auth.user_credential import UserCredential
@@ -50,33 +51,33 @@ def colaboradores_excel():
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
 def update_sharepoint_file(df):
-    try:
-        output = io.BytesIO()
-        df.to_excel(output, index=False)
-        output.seek(0)
-        file_content = output.read()
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        folder_path = "/".join(file_name.split("/")[:-1])
-        file_name_only = file_name.split("/")[-1]
-        target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
-        target_folder.upload_file(file_name_only, file_content).execute_query()
-        st.cache_data.clear()
-        st.session_state["df_apontamentos"] = df
-        st.success("Mudanças submetidas com sucesso! Recarregue a pagina para ver as mudanças")
-    except Exception as e:
-        locked = (
-            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
-            or "-2147018894" in str(e)                       # SPFileLockException
-            or "lock" in str(e).lower()                      # texto contém “lock”
-        )
-        if locked:
-            st.warning(
-                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
-                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
+    while True:
+        try:
+            output = io.BytesIO()
+            df.to_excel(output, index=False)
+            output.seek(0)
+            file_content = output.read()
+            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+            folder_path = "/".join(file_name.split("/")[:-1])
+            file_name_only = file_name.split("/")[-1]
+            target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+            target_folder.upload_file(file_name_only, file_content).execute_query()
+            st.cache_data.clear()
+            st.session_state["df_apontamentos"] = df
+            st.success("Mudanças submetidas com sucesso! Recarregue a pagina para ver as mudanças")
+            break
+        except Exception as e:
+            locked = (
+                getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+                or "-2147018894" in str(e)                       # SPFileLockException
+                or "lock" in str(e).lower()                      # texto contém “lock”
+            )
+            if locked:
+                st.warning(
+                    "Outra pessoa está salvando um apontamento. Tentando novamente em 5 segundos..."
                 )
-        else:
-            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
-
+                time.sleep(5)
+                continue
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
