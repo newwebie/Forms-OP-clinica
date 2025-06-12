@@ -101,7 +101,7 @@ def update_status_fields():
     s = st.session_state["status"]
 
     if s == "VERIFICANDO":
-        st.info("Esse staus só pode ser preenchido pelo Guilherme Silva")
+        st.info("Esse staus só pode ser preenchido pelo Guilherme Goncalves")
 
     elif s == "REALIZADO": 
         st.session_state["enable_data_resolucao"] = True
@@ -255,11 +255,14 @@ if tab_option == "Formulário":
             if selected_protocol == "Digite o codigo do estudo" or participante.strip() == "" or apontamento.strip() == "" or responsavel.strip() == "":
                 st.error("Por favor, preencha os campos obrigatórios: Código do Estudo, Participante e Responsável.")
             elif status == "VERIFICANDO" and verificador_nome.strip() == "":
-                st.error("Por favor, preencha o campo 'Responsável pela verificação'.")
+                st.error("Somente o Guilherme Gonçalves pode usar esse status!.")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
             elif responsavel == "Selecione um colaborador":
                 st.warning("Por favor, selecione o colaborador responsável antes de salvar.")
+                st.stop()
+            elif correcao == "Selecione um colaborador":
+                st.warning("Por favor, selecione o colaborador responsável pela correção antes de salvar.")
                 st.stop()
             else:
                 data_atual = datetime.now()
