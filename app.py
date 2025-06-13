@@ -267,6 +267,9 @@ if tab_option == "Formulário":
             else:
                 data_atual = datetime.now()
 
+                if st.session_state["status"] == "REALIZADO DURANTE A CONDUÇÃO":
+                    resolucao = data_atual
+
                 novo_apontamento = {
                     "Código do Estudo": selected_protocol,
                     "Nome da Pesquisa": research_name,
