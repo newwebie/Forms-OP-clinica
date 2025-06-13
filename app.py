@@ -291,23 +291,12 @@ if tab_option == "Formulário":
                 }
                 
                 df = st.session_state["df_apontamentos"]
-                duplicado_set = set(zip(df["Código do Estudo"], df["Documentos"], df["Participante"]))
-                chave_nova = (selected_protocol, documento_final, st.session_state["participante"])
+
+                novo_df = pd.DataFrame([novo_apontamento])
+                df = pd.concat([df, novo_df], ignore_index=True)
+                update_sharepoint_file(df)
+                st.session_state["df_apontamentos"] = df
                 
-                if chave_nova in duplicado_set:
-                    duplicado = df[
-                        (df["Código do Estudo"] == selected_protocol) &
-                        (df["Documentos"] == documento_final) &
-                        (df["Participante"] == st.session_state["participante"])
-                    ]
-                    data_existente = duplicado.iloc[0]["Data do Apontamento"]
-                    st.warning(f"Apontamento já existe. Data do Apontamento: {data_existente}")
-                else:
-                    novo_df = pd.DataFrame([novo_apontamento])
-                    df = pd.concat([df, novo_df], ignore_index=True)
-                    update_sharepoint_file(df)
-                    st.session_state["df_apontamentos"] = df
-                    
 
 elif tab_option == "Lista de Apontamentos":
     df = st.session_state["df_apontamentos"]
