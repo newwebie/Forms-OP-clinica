@@ -302,8 +302,19 @@ if tab_option == "Formulário":
                 
 
 elif tab_option == "Lista de Apontamentos":
+    # ─────────────────────────────────────────────────────────────
+    # 1️⃣  Garante que exista a coluna-ID e a torna índice permanente
+    # ─────────────────────────────────────────────────────────────
     df = st.session_state["df_apontamentos"]
-    # Inicializa session state
+
+    if "orig_idx" not in df.columns:                # primeira vez?
+        df["orig_idx"] = range(len(df))             # gera IDs
+
+    df.set_index("orig_idx", inplace=True)          # índice fixo = ID
+
+    # ─────────────────────────────────────────────────────────────
+    # 2️⃣  Estado da interface
+    # ─────────────────────────────────────────────────────────────
     if "mostrar_campos_finais" not in st.session_state:
         st.session_state.mostrar_campos_finais = False
     if "indices_alterados" not in st.session_state:
@@ -313,60 +324,68 @@ elif tab_option == "Lista de Apontamentos":
 
     st.title("Lista de Apontamentos")
 
-    col_btn1,*_ = st.columns(6)
-
+    col_btn1, *_ = st.columns(6)
     with col_btn1:
-                    st.button(
-                        "🔄  Atualizar",
-                        key="btn_clear_cache",
-                        on_click=clear_cache_and_reload
-                    )
+        st.button("🔄  Atualizar", key="btn_clear_cache", on_click=clear_cache_and_reload)
 
+    # ─────────────────────────────────────────────────────────────
+    # 3️⃣  Filtros rápidos / seletor de estudo
+    # ─────────────────────────────────────────────────────────────
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
     else:
-        # Cria cópia filtrada para edição
         df_filtrado = df.copy()
+
         opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique().tolist())
         estudo_selecionado = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
 
         if estudo_selecionado != "Todos":
             df_filtrado = df[df["Código do Estudo"] == estudo_selecionado]
-            
+
+        # colunas principais (sem orig_idx ainda; vamos expor depois)
         columns_to_display = [
-            "Status",
-            "Código do Estudo",
-            "Responsável Pela Correção",
-            "Plantão",
-            "Participante",
-            "Período",
-            "Documentos",
-            "Apontamento",
-            "Prazo Para Resolução",
-            "Data Resolução",
-            "Justificativa",
-            "Responsável Pelo Apontamento",
-            "Origem Do Apontamento",
+            "Status", "Código do Estudo", "Responsável Pela Correção", "Plantão",
+            "Participante", "Período", "Documentos", "Apontamento",
+            "Prazo Para Resolução", "Data Resolução", "Justificativa",
+            "Responsável Pelo Apontamento", "Origem Do Apontamento",
         ]
         df_filtrado = df_filtrado[columns_to_display]
 
-
-        # Converte colunas de data para datetime64[ns]
+        # Converte datas
         colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data Resolução"]
         for col in colunas_data:
             if col in df_filtrado.columns:
-                df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors='coerce')
-        # Editor configurado
+                df_filtrado[col] = pd.to_datetime(df_filtrado[col], errors="coerce")
+
+        # ─────────────────────────────────────────────────────────
+        # 4️⃣  Torna o ID visível (duplica o índice → coluna)
+        # ─────────────────────────────────────────────────────────
+        df_filtrado = df_filtrado.reset_index()          # índice → coluna 'orig_idx'
+        first = df_filtrado.pop("orig_idx")
+        df_filtrado.insert(0, "orig_idx", first)         # mostra como 1ª coluna
+
+        # ─────────────────────────────────────────────────────────
+        # 5️⃣  Configuração do editor
+        # ─────────────────────────────────────────────────────────
         columns_config = {}
         for col in df_filtrado.columns:
             if col == "Status":
                 columns_config[col] = st.column_config.SelectboxColumn(
                     "Status",
-                    options=["REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"],
+                    options=[
+                        "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO",
+                        "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
+                    ],
                     disabled=False
                 )
             elif col in colunas_data:
-                columns_config[col] = st.column_config.DateColumn(col, disabled=True, format="DD/MM/YYYY")
+                columns_config[col] = st.column_config.DateColumn(
+                    col, disabled=True, format="DD/MM/YYYY"
+                )
+            elif col == "orig_idx":
+                columns_config[col] = st.column_config.NumberColumn(
+                    "ID", disabled=True                  # ID fixo, não editável
+                )
             else:
                 columns_config[col] = st.column_config.TextColumn(col, disabled=True)
 
@@ -374,15 +393,18 @@ elif tab_option == "Lista de Apontamentos":
             df_filtrado,
             column_config=columns_config,
             num_rows="fixed",
-            key="data_editor"
+            key="data_editor",
+            hide_index=True                             # só exibe a coluna “ID”
         )
 
-
+        # ─────────────────────────────────────────────────────────
+        # 6️⃣  Detecta alterações de Status
+        # ─────────────────────────────────────────────────────────
         if not st.session_state.mostrar_campos_finais:
             if st.button("Status modificados"):
                 alterado = False
                 indices_alterados = []
-                df_atualizado = df.copy()  # importante: manter df completo para atualizar
+                df_atualizado = df.copy()               # mantemos o df completo
 
                 for i in range(len(df_filtrado)):
                     status_original = df_filtrado.iloc[i]["Status"]
@@ -390,7 +412,7 @@ elif tab_option == "Lista de Apontamentos":
 
                     if status_novo != status_original:
                         alterado = True
-                        idx_original = df_filtrado.index[i]
+                        idx_original = int(df_filtrado.iloc[i]["orig_idx"])  # ← usa coluna ID
                         indices_alterados.append(idx_original)
 
                         df.loc[idx_original, "Status"] = status_novo
@@ -402,7 +424,9 @@ elif tab_option == "Lista de Apontamentos":
                     st.session_state.indices_alterados = indices_alterados
                     st.session_state.df_atualizado = df
 
-        # Campos obrigatórios + submissão
+        # ─────────────────────────────────────────────────────────
+        # 7️⃣  Campos finais obrigatórios e submissão
+        # ─────────────────────────────────────────────────────────
         if st.session_state.mostrar_campos_finais:
             df = st.session_state.df_atualizado
             indices_alterados = st.session_state.indices_alterados
@@ -412,16 +436,13 @@ elif tab_option == "Lista de Apontamentos":
 
             for idx in indices_alterados:
                 status_novo = df.loc[idx, "Status"]
-
                 st.markdown(f"#### Apontamento ID {idx}")
 
                 if status_novo in ["REALIZADO", "NÃO APLICÁVEL"]:
                     key_data = f"data_conclusao_{idx}"
-                    data_conclusao = st.date_input("Data de Resolução",
-                        key=key_data,
-                        format="DD/MM/YYYY",
+                    data_conclusao = st.date_input(
+                        "Data de Resolução", key=key_data, format="DD/MM/YYYY"
                     )
-
                     if not data_conclusao:
                         linhas_faltando.append(f"[ID {idx}] Data de Resolução")
                     else:
@@ -429,16 +450,17 @@ elif tab_option == "Lista de Apontamentos":
 
                 if status_novo == "NÃO APLICÁVEL":
                     key_just = f"justificativa_{idx}"
-                    justificativa = st.text_area("Justificativa obrigatória:", key=key_just
+                    justificativa = st.text_area(
+                        "Justificativa obrigatória:", key=key_just
                     )
                     if not justificativa.strip():
                         linhas_faltando.append(f"[ID {idx}] Justificativa")
                     else:
                         df.loc[idx, "Justificativa"] = justificativa
-                
+
                 st.markdown("---")
 
-            #Filtrando o df para aparecer somente a galera de excelencia operacional
+            # Responsável pela atualização
             colaboradores_eo = colaboradores_df[colaboradores_df["Departamento"] == "Excelência Operacional"]
             responsavel_options = ["Selecione um Colaborador"] + colaboradores_eo["Nome Completo do Profissional"].tolist()
             responsavel = st.selectbox("Responsável pela Atualização", options=responsavel_options, key="responsavel_final")
@@ -455,7 +477,7 @@ elif tab_option == "Lista de Apontamentos":
                     update_sharepoint_file(df)
                     st.session_state["df_apontamentos"] = df
 
-                    # Reset estado
+                    # limpa estados
                     st.session_state.mostrar_campos_finais = False
                     st.session_state.indices_alterados = []
                     st.session_state.df_atualizado = None
