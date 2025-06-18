@@ -213,8 +213,7 @@ if tab_option == "Formulário":
             '8° Período', '9° Período', '10° Período'
         ], key="periodo")
         
-        criticidade = st.selectbox("Grau De Criticidade Do Apontamento", ["Baixo", "Médio", "Alto"], key="criticidade")
-        st.text('Baixo: O apontamento tem rastreabilidade e não gera impacto no RC \nMédio: O apontamento tem rastreabilidade e gera impacto no RC, precisa de correção em sistema \nAlta: O apontamento não tem rastreabilidade')
+
         prazo = st.date_input("Prazo Para Resolução", format="DD/MM/YYYY", key="prazo")
         apontamento = st.text_area("Apontamento", key="apontamento")
 
@@ -279,7 +278,6 @@ if tab_option == "Formulário":
                     "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
                     "Participante": st.session_state["participante"],
                     "Período": st.session_state["periodo"],
-                    "Grau De Criticidade Do Apontamento": st.session_state["criticidade"],
                     "Prazo Para Resolução": st.session_state["prazo"],
                     "Apontamento": st.session_state["apontamento"],
                     "Status": st.session_state["status"],
