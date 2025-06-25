@@ -255,6 +255,8 @@ if tab_option == "Formulário":
                 st.error("Por favor, preencha os campos obrigatórios: Código do Estudo, Participante e Responsável.")
             elif status == "VERIFICANDO" and verificador_nome.strip() == "":
                 st.error("Somente o Guilherme Gonçalves pode usar esse status!.")
+            elif  status == "":
+                st.error("Por favor, defina um status antes de submeter o apontamento!")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
             elif responsavel == "Selecione um colaborador":
