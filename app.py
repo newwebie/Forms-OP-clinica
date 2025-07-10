@@ -81,11 +81,26 @@ def update_sharepoint_file(df):
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
-colaboradores_df  = colaboradores_excel()
+colaboradores_df = colaboradores_excel()
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
-    st.session_state["df_apontamentos"] = get_sharepoint_file()
+    df_loaded = get_sharepoint_file()
+    
+    # Fill missing or invalid IDs to prevent NaN issues
+    if not df_loaded.empty:
+        if "ID" not in df_loaded.columns:
+            df_loaded["ID"] = range(1, len(df_loaded) + 1)
+        else:
+            df_loaded["ID"] = pd.to_numeric(df_loaded["ID"], errors='coerce')
+            if df_loaded["ID"].isna().any():
+                max_id = df_loaded["ID"].max() if not pd.isna(df_loaded["ID"].max()) else 0
+                mask = df_loaded["ID"].isna()
+                for idx in df_loaded.index[mask]:
+                    max_id += 1
+                    df_loaded.at[idx, "ID"] = max_id
+    
+    st.session_state["df_apontamentos"] = df_loaded
 
 # Configurar session_state para campos condicionais
 if "status" not in st.session_state:
@@ -289,12 +304,16 @@ if tab_option == "Formulário":
                     resolucao = data_atual
                 
                 df = st.session_state["df_apontamentos"]
-                if "ID" in df.columns and not df.empty:
-                    # pega o valor da última linha da coluna ID
-                    last_id = int(df["ID"].iloc[-1])
-                    next_id = last_id + 1
+                
+                # Safer way to get next ID: use max() instead of iloc[-1], handling empty or no "ID" column
+                if not df.empty and "ID" in df.columns:
+                    df["ID"] = pd.to_numeric(df["ID"], errors='coerce')  # Ensure numeric
+                    last_id = df["ID"].max()
+                    if pd.isna(last_id):
+                        next_id = 1
+                    else:
+                        next_id = int(last_id) + 1
                 else:
-                    # se o DF estiver vazio ou não tiver coluna ID
                     next_id = 1
 
                 novo_apontamento = {
