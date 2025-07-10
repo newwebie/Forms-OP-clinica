@@ -289,16 +289,12 @@ if tab_option == "Formulário":
                     resolucao = data_atual
                 
                 df = st.session_state["df_apontamentos"]
-                if (
-                    "ID" in df.columns and not df.empty and
-                    df["ID"].dropna().size > 0
-                ):
-                    try:
-                        last_id = int(pd.to_numeric(df["ID"], errors="coerce").dropna().iloc[-1])
-                        next_id = last_id + 1
-                    except:
-                        next_id = 1
+                if "ID" in df.columns and not df.empty:
+                    # pega o valor da última linha da coluna ID
+                    last_id = int(df["ID"].iloc[-1])
+                    next_id = last_id + 1
                 else:
+                    # se o DF estiver vazio ou não tiver coluna ID
                     next_id = 1
 
                 novo_apontamento = {
