@@ -291,7 +291,7 @@ if tab_option == "Formulário":
                 df = st.session_state["df_apontamentos"]
                 if "ID" in df.columns and not df.empty:
                     # pega o valor da última linha da coluna ID
-                    last_id = int(df["ID"].iloc[-1])
+                    last_id = int(pd.to_numeric(df["ID"], errors="coerce").dropna().iloc[-1])
                     next_id = last_id + 1
                 else:
                     # se o DF estiver vazio ou não tiver coluna ID
