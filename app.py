@@ -263,7 +263,7 @@ if tab_option == "Formulário":
         
         pp_final = get_final_pp()
              
-        periodo = st.selectbox("Período", ["N/A",
+        periodo = st.selectbox("Período", ["N/A", "Pós",
             '1° Período', '2° Período', '3° Período',
             '4° Período', '5° Período', '6° Período', '7° Período', 
             '8° Período', '9° Período', '10° Período'
