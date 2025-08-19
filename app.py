@@ -3,6 +3,8 @@ import pandas as pd
 from datetime import datetime
 import io
 import time
+import random
+import string
 
 # >>> usa o conector (precisa do arquivo sp_connector.py no repo)
 from sp_connector import SPConnector
