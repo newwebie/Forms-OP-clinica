@@ -55,6 +55,18 @@ def colaboradores_excel():
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint (Graph): {e}")
         return pd.DataFrame()
+    
+
+def generate_custom_id(existing_ids: set[str]) -> str:
+    while True:
+        digits = random.choices(string.digits, k=3)
+        letters = random.choices(string.ascii_uppercase, k=2)
+        chars = digits + letters
+        random.shuffle(chars)
+        new_id = "".join(chars)
+        if new_id not in existing_ids:
+            return new_id
+        
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
 def update_sharepoint_file(df: pd.DataFrame):
@@ -92,17 +104,22 @@ if "df_apontamentos" not in st.session_state:
     # Fill missing or invalid IDs to prevent NaN issues
     if not df_loaded.empty:
         if "ID" not in df_loaded.columns:
-            df_loaded["ID"] = range(1, len(df_loaded) + 1)
+            dexisting = set()
+            df_loaded["ID"] = [generate_custom_id(existing) for _ in range(len(df_loaded))]
         else:
-            df_loaded["ID"] = pd.to_numeric(df_loaded["ID"], errors='coerce')
-            if df_loaded["ID"].isna().any():
-                max_id = df_loaded["ID"].max() if not pd.isna(df_loaded["ID"].max()) else 0
-                mask = df_loaded["ID"].isna()
-                for idx in df_loaded.index[mask]:
-                    max_id += 1
-                    df_loaded.at[idx, "ID"] = max_id
+            df_loaded["ID"] = df_loaded["ID"].astype(str)
+            existing = set(df_loaded["ID"])
+            mask = df_loaded["ID"].str.lower().isin(["nan", "none", "", "nat"])
+            for idx in df_loaded.index[mask]:
+                new_id = generate_custom_id(existing)
+                df_loaded.at[idx, "ID"] = new_id
+                existing.add(new_id)
     
     st.session_state["df_apontamentos"] = df_loaded
+
+    # Gerando o ID do apontamento atual
+    existing_ids = set(df_loaded["ID"].astype(str)) if not df_loaded.empty else set()
+    st.session_state["generated_id"] = generate_custom_id(existing_ids)
 
 # Configurar session_state para campos condicionais
 if "status" not in st.session_state:
@@ -151,8 +168,6 @@ def pegar_dados_colab(nome_colab: str, df: pd.DataFrame, campos: list[str]):
     lin = linha.iloc[0]
     return tuple(lin[campo] if campo in lin else "" for campo in campos)
 
-def clear_cache_and_reload():
-    st.cache_data.clear()
 
 # Início da tela principal
 tab_names = ["Formulário", "Lista de Apontamentos"]
@@ -172,6 +187,13 @@ if tab_option == "Formulário":
     if df_study.empty:
         st.error("Arquivo CSV de estudos não carregado. Verifique o caminho do arquivo.")
     else:
+
+        if "generated_id" not in st.session_state:
+            df_ids = st.session_state.get("df_apontamentos", pd.DataFrame())
+            existing = set(df_ids["ID"].astype(str)) if not df_ids.empty else set()
+            st.session_state["generated_id"] = generate_custom_id(existing)
+
+        st.text_input("ID do Apontamento", value=st.session_state["generated_id"], disabled=True)
         protocol_options = ["Digite o codigo do estudo"] + df_study["NUMERO_DO_PROTOCOLO"].tolist()
         selected_protocol = st.selectbox("Código do Estudo", options=protocol_options, key="selected_protocol")
         
@@ -241,7 +263,7 @@ if tab_option == "Formulário":
         
         pp_final = get_final_pp()
              
-        periodo = st.selectbox("Período", ["N/A",
+        periodo = st.selectbox("Período", ["N/A", "Pós",
             '1° Período', '2° Período', '3° Período',
             '4° Período', '5° Período', '6° Período', '7° Período', 
             '8° Período', '9° Período', '10° Período'
@@ -306,17 +328,11 @@ if tab_option == "Formulário":
                     resolucao = data_atual
                 
                 df = st.session_state["df_apontamentos"]
+
+                # Usa o ID gerado previamente para este apontamento
+                next_id = st.session_state.get("generated_id")
                 
-                # Safer way to get next ID: use max() instead of iloc[-1], handling empty or no "ID" column
-                if not df.empty and "ID" in df.columns:
-                    df["ID"] = pd.to_numeric(df["ID"], errors='coerce')  # Ensure numeric
-                    last_id = df["ID"].max()
-                    if pd.isna(last_id):
-                        next_id = 1
-                    else:
-                        next_id = int(last_id) + 1
-                else:
-                    next_id = 1
+                
 
                 novo_apontamento = {
                     "ID": next_id,
@@ -347,6 +363,7 @@ if tab_option == "Formulário":
                 df = pd.concat([df, novo_df], ignore_index=True)
                 update_sharepoint_file(df)
                 st.session_state["df_apontamentos"] = df
+                st.session_state["generated_id"] = generate_custom_id(set(df["ID"].astype(str)))
                 
 
 
@@ -362,9 +379,10 @@ if tab_option == "Lista de Apontamentos":
         df.insert(0, "orig_idx", range(len(df)))  # índice técnico permanente
         df.set_index("orig_idx", inplace=True)
 
-    # Cria a coluna ID visível caso não exista (mock = índice + 1)
+    # Cria a coluna ID visível caso não exista
     if "ID" not in df.columns:
-        df["ID"] = df.index + 1
+        existing = set()
+        df["ID"] = [generate_custom_id(existing) for _ in range(len(df))]
 
     # ─────────────────────────────────────────────────────────────
     # 2️⃣  Estado da interface
@@ -377,7 +395,8 @@ if tab_option == "Lista de Apontamentos":
 
     col_btn1, *_ = st.columns(6)
     with col_btn1:
-        st.button("🔄  Atualizar", key="btn_clear_cache", on_click=clear_cache_and_reload)
+        if st.button("🔄  Atualizar", key="btn_clear_cache"):
+            st.cache_data.clear()
 
     # ─────────────────────────────────────────────────────────────
     # 3️⃣  Filtros rápidos / seletor de estudo
@@ -388,6 +407,7 @@ if tab_option == "Lista de Apontamentos":
 
     df_filtrado = df.copy()
 
+    campo_id = st.text
     opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique().tolist())
     estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
 
@@ -413,7 +433,7 @@ if tab_option == "Lista de Apontamentos":
     # 4️⃣  Config do editor (ID bloqueado, Status editável)
     # ─────────────────────────────────────────────────────────────
     columns_config = {
-        "ID": st.column_config.NumberColumn("ID", disabled=True)
+        "ID": st.column_config.TextColumn("ID", disabled=True)
     }
 
     for col in df_filtrado.columns:
