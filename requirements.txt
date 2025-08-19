@@ -1,8 +1,6 @@
-certifi==2024.2.2
+opencv-python==4.9.0.80
 pandas==2.2.3
-plotly==5.24.1
-pymongo==4.11.3
-shareplum==0.5.1
-streamlit==1.45.0
-Office365_REST_Python_Client==2.5.14
+streamlit==1.39.0
+msal==1.29.0
 openpyxl==3.1.5
+requests==2.32.0

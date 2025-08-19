@@ -3,85 +3,87 @@ import pandas as pd
 from datetime import datetime
 import io
 import time
-from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.files.file import File
-from office365.runtime.auth.user_credential import UserCredential
 
-# === Configurações do SharePoint ===
-username = st.secrets["sharepoint"]["username"]
-password = st.secrets["sharepoint"]["password"]
-site_url = st.secrets["sharepoint"]["site_url"]
-file_name = st.secrets["sharepoint"]["file_name"]
-bio_file = st.secrets["sharepoint"]["bio_file"]
-colaboradores = st.secrets["sharepoint"]["colaboradores"]
+# >>> usa o conector (precisa do arquivo sp_connector.py no repo)
+from sp_connector import SPConnector
+
+# === Configurações via secrets (SharePoint - site servicosclinicos) ===
+TENANT_ID = st.secrets["graph"]["tenant_id"]
+CLIENT_ID = st.secrets["graph"]["client_id"]
+CLIENT_SECRET = st.secrets["graph"]["client_secret"]
+HOSTNAME = st.secrets["graph"]["hostname"]            # 'synviagroup.sharepoint.com'
+SITE_PATH = st.secrets["graph"]["site_path"]          # 'sites/servicosclinicos'
+LIBRARY   = st.secrets["graph"]["library_name"]       # 'Acompanhamento dos Estudos'
+
+APONTAMENTOS  = st.secrets["files"]["apontamentos"]   # 'SANDRA/PROJETO_DASHBOARD/base_apontamentos - Copia.xlsx'
+ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]    # 'SANDRA/PROJETO_DASHBOARD/ESTUDOS_BIO.csv'
+COLABORADORES = st.secrets["files"]["colaboradores"]  # 'SANDRA/PROJETO_DASHBOARD/base_cargo.xlsx'
+
+# Instância única do conector (cacheada)
+@st.cache_resource
+def _sp():
+    return SPConnector(
+        TENANT_ID, CLIENT_ID, CLIENT_SECRET,
+        hostname=HOSTNAME, site_path=SITE_PATH, library_name=LIBRARY
+    )
 
 # Função para ler o arquivo Excel (Apontamentos) do SharePoint com cache
 @st.cache_data
 def get_sharepoint_file():
     try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, file_name)
-        return pd.read_excel(io.BytesIO(response.content))
+        return _sp().read_excel(APONTAMENTOS)
     except Exception as e:
-        st.error(f"Erro ao acessar o arquivo no SharePoint: {e}")
+        st.error(f"Erro ao acessar o arquivo no SharePoint (Graph): {e}")
         return pd.DataFrame()
 
 # Função para ler o arquivo CSV (Estudos) do SharePoint com cache
 @st.cache_data
 def get_sharepoint_file_estudos_csv():
     try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, bio_file)
-        return pd.read_csv(io.BytesIO(response.content))
+        return _sp().read_csv(ESTUDOS_CSV)
     except Exception as e:
-        st.error(f"Erro ao acessar o arquivo CSV de estudos no SharePoint: {e}")
+        st.error(f"Erro ao acessar o arquivo CSV de estudos no SharePoint (Graph): {e}")
         return pd.DataFrame()
 
 @st.cache_data
 def colaboradores_excel():
     try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, colaboradores)
-        xls = pd.ExcelFile(io.BytesIO(response.content))
+        data = _sp().download(COLABORADORES)
+        xls = pd.ExcelFile(io.BytesIO(data))
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
         return colaboradores_df
     except Exception as e:
-        st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
+        st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint (Graph): {e}")
         return pd.DataFrame()
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df):
+def update_sharepoint_file(df: pd.DataFrame):
+    attempts = 0
     while True:
         try:
             output = io.BytesIO()
-            df.to_excel(output, index=False)
+            df.to_excel(output, index=False)  # grava um único sheet (Sheet1)
             output.seek(0)
-            file_content = output.read()
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-            folder_path = "/".join(file_name.split("/")[:-1])
-            file_name_only = file_name.split("/")[-1]
-            target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
-            target_folder.upload_file(file_name_only, file_content).execute_query()
+            _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
             st.cache_data.clear()
             st.session_state["df_apontamentos"] = df
-            st.success("Mudanças submetidas com sucesso! Recarregue a pagina para ver as mudanças")
+            st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
             break
         except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423        # HTTP 423 Locked
-                or "-2147018894" in str(e)                       # SPFileLockException
-                or "lock" in str(e).lower()                      # texto contém “lock”
-            )
-            if locked:
-                st.warning(
-                    "Outra pessoa está salvando um apontamento. Tentando novamente em 5 segundos..."
-                )
+            attempts += 1
+            msg = str(e)
+            # 409/412 = conflito de versão | 429 = throttling
+            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
+                st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
+            st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
+            break
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
 colaboradores_df = colaboradores_excel()
+
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
