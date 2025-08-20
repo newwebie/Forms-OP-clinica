@@ -71,18 +71,38 @@ def generate_custom_id(existing_ids: set[str]) -> str:
         
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df: pd.DataFrame):
+def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
     attempts = 0
     while True:
         try:
+            # Carrega versão mais recente do arquivo
+            base_df = _sp().read_excel(APONTAMENTOS)
+            if not base_df.empty:
+                base_df["ID"] = base_df["ID"].astype(str)
+                base_df.set_index("ID", inplace=True)
+            else:
+                base_df = pd.DataFrame().set_index("ID")
+
+            df = df.copy()
+            if "ID" in df.columns:
+                df["ID"] = df["ID"].astype(str)
+                df.set_index("ID", inplace=True)
+
+            # Atualiza linhas existentes e adiciona novas
+            base_df.update(df)
+            novos = df.index.difference(base_df.index)
+            if len(novos) > 0:
+                base_df = pd.concat([base_df, df.loc[novos]])
+
+            base_df.reset_index(inplace=True)
+
             output = io.BytesIO()
-            df.to_excel(output, index=False)  # grava um único sheet (Sheet1)
+            base_df.to_excel(output, index=False)
             output.seek(0)
             _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
-            st.cache_data.clear()
-            st.session_state["df_apontamentos"] = df
+
             st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
-            break
+            return base_df
         except Exception as e:
             attempts += 1
             msg = str(e)
@@ -92,7 +112,7 @@ def update_sharepoint_file(df: pd.DataFrame):
                 time.sleep(5)
                 continue
             st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
-            break
+            return None
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
@@ -362,10 +382,12 @@ if tab_option == "Formulário":
 
 
                 novo_df = pd.DataFrame([novo_apontamento])
-                df = pd.concat([df, novo_df], ignore_index=True)
-                update_sharepoint_file(df)
-                st.session_state["df_apontamentos"] = df
-                st.session_state["generated_id"] = generate_custom_id(set(df["ID"].astype(str)))
+                df_atualizado = update_sharepoint_file(novo_df)
+                if df_atualizado is not None:
+                    st.session_state["df_apontamentos"] = df_atualizado
+                    st.session_state["generated_id"] = generate_custom_id(
+                        set(df_atualizado["ID"].astype(str))
+                    )
                 
 
 
@@ -391,14 +413,16 @@ if tab_option == "Lista de Apontamentos":
     # ─────────────────────────────────────────────────────────────
     st.session_state.setdefault("mostrar_campos_finais", False)
     st.session_state.setdefault("indices_alterados", [])
-    st.session_state.setdefault("df_atualizado", None)
+
 
     st.title("Lista de Apontamentos")
 
     col_btn1, *_ = st.columns(6)
     with col_btn1:
-        if st.button("🔄  Atualizar", key="btn_clear_cache"):
-            st.cache_data.clear()
+        if st.button("🔄 Atualizar"):
+            st.cache_data.clear()      
+            st.cache_resource.clear()
+            st.rerun()  
 
     # ─────────────────────────────────────────────────────────────
     # 3️⃣  Filtros rápidos / seletor de estudo
@@ -479,7 +503,7 @@ if tab_option == "Lista de Apontamentos":
                     id_val = df_filtrado.iloc[i]["ID"]    # pega o ID visível
 
                     # Atualiza no DataFrame base usando a coluna ID
-                    df_atualizado.loc[df_atualizado["ID"] == id_val, "Status"] = status_novo
+                    df.loc[df["ID"] == id_val, "Status"] = status_novo
                     indices_alterados.append(id_val)
 
             if not alterado:
@@ -487,13 +511,13 @@ if tab_option == "Lista de Apontamentos":
             else:
                 st.session_state.mostrar_campos_finais = True
                 st.session_state.indices_alterados = indices_alterados
-                st.session_state.df_atualizado = df_atualizado
+
 
     # ─────────────────────────────────────────────────────────────
     # 6️⃣  Campos finais obrigatórios + submissão
     # ─────────────────────────────────────────────────────────────
     if st.session_state.mostrar_campos_finais:
-        df = st.session_state.df_atualizado
+        df = st.session_state["df_apontamentos"]
         indices_alterados = st.session_state.indices_alterados
         linhas_faltando = []
 
@@ -535,8 +559,10 @@ if tab_option == "Lista de Apontamentos":
                 df.loc[df["ID"].isin(indices_alterados), "Verificador"] = responsavel
 
                 # Salva de volta
-                update_sharepoint_file(df)
-                st.session_state["df_apontamentos"] = df
+                rows_to_save = df[df["ID"].isin(indices_alterados)]
+                df_atualizado = update_sharepoint_file(rows_to_save)
+                if df_atualizado is not None:
+                    st.session_state["df_apontamentos"] = df_atualizado
 
                 # Limpa estados
                 st.session_state.mostrar_campos_finais = False
