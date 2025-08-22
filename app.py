@@ -13,12 +13,12 @@ from sp_connector import SPConnector
 TENANT_ID = st.secrets["graph"]["tenant_id"]
 CLIENT_ID = st.secrets["graph"]["client_id"]
 CLIENT_SECRET = st.secrets["graph"]["client_secret"]
-HOSTNAME = st.secrets["graph"]["hostname"]            # 'synviagroup.sharepoint.com'
-SITE_PATH = st.secrets["graph"]["site_path"]          # 'sites/servicosclinicos'
-LIBRARY   = st.secrets["graph"]["library_name"]       # 'Acompanhamento dos Estudos'
+HOSTNAME = st.secrets["graph"]["hostname"]           
+SITE_PATH = st.secrets["graph"]["site_path"]        
+LIBRARY   = st.secrets["graph"]["library_name"]     
 
-APONTAMENTOS  = st.secrets["files"]["apontamentos"]   # 'SANDRA/PROJETO_DASHBOARD/base_apontamentos - Copia.xlsx'
-ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]    # 'SANDRA/PROJETO_DASHBOARD/ESTUDOS_BIO.csv'
+APONTAMENTOS  = st.secrets["files"]["apontamentos"]   
+ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]    
 COLABORADORES = st.secrets["files"]["colaboradores"]  # 'SANDRA/PROJETO_DASHBOARD/base_cargo.xlsx'
 
 # Instância única do conector (cacheada)
@@ -304,9 +304,28 @@ if tab_option == "Formulário":
 
 
         # Campo de Status com callback (supondo que a função update_status_fields esteja definida)
-        status = st.selectbox("Status", [
-            "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
-        ], key="status", on_change=update_status_fields)
+        opts = ["PENDENTE","REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "NÃO APLICÁVEL"]
+        key = "status"
+
+        def _norm(x):
+            if x is None: return None
+            s = str(x).strip()
+            return s if s else None  # trata "" como None
+
+        cur = _norm(st.session_state.get(key))
+
+        # se o valor atual não é uma opção válida, remove do session_state
+        if (cur is None) or (cur not in opts):
+            st.session_state.pop(key, None)
+
+        status = st.selectbox(
+            "Status",
+            opts,
+            key=key,
+            index=None,                    # deixa sem seleção inicial
+            placeholder="Selecione…",
+            on_change=update_status_fields
+        )
         
 
         if st.session_state["enable_nao_aplicavel"]:
