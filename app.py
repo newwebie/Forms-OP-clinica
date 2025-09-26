@@ -304,7 +304,7 @@ if tab_option == "Formulário":
 
 
         # Campo de Status com callback (supondo que a função update_status_fields esteja definida)
-        opts = ["PENDENTE","REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "NÃO APLICÁVEL"]
+        opts = ["Selecione um Status","PENDENTE","REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "NÃO APLICÁVEL"]
         key = "status"
 
         def _norm(x):
@@ -318,12 +318,12 @@ if tab_option == "Formulário":
         if (cur is None) or (cur not in opts):
             st.session_state.pop(key, None)
 
+
+
         status = st.selectbox(
             "Status",
             opts,
             key=key,
-            index=None,                    # deixa sem seleção inicial
-            placeholder="Selecione…",
             on_change=update_status_fields
         )
         
@@ -349,10 +349,10 @@ if tab_option == "Formulário":
         if submit:
             # Validação dos campos obrigatórios
             if selected_protocol == "Digite o codigo do estudo" or participante.strip() == "" or apontamento.strip() == "" or responsavel.strip() == "":
-                st.error("Por favor, preencha os campos obrigatórios: Código do Estudo, Participante e Responsável.")
+                st.error("Por favor, preencha os campos obrigatórios: Código do Estudo, Participante, Responsável e Apontamento.")
             elif status == "VERIFICANDO" and verificador_nome.strip() == "":
                 st.error("Somente o Guilherme Gonçalves pode usar esse status!.")
-            elif  status == "":
+            elif  status == "Selecione um Status":
                 st.error("Por favor, defina um status antes de submeter o apontamento!")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
