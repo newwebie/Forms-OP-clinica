@@ -524,6 +524,8 @@ if tab_option == "Formulário":
 
                 novo_df = pd.DataFrame([novo_apontamento])
                 # operador da ação (quem clicou/salvou)
+
+                
                 
 
                 # log de criação (você disse que logs são só de status — aqui registrei o status inicial)
@@ -706,9 +708,12 @@ if tab_option == "Lista de Apontamentos":
                     alterado = True
                     indices_alterados.append(id_val)
 
+                    estudo_da_linha = df.loc[df["ID"].astype(str) == id_val, "Código do Estudo"].iloc[0]
+
+
                     pending_logs.append(build_log_rows(
                         id_apontamento=id_val,
-                        estudo=selected_protocol,
+                        estudo=estudo_da_linha,
                         operacao="edição",
                         campo="Status",
                         valor_antes=status_original,
