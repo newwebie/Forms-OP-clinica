@@ -556,6 +556,30 @@ if tab_option == "Formulário":
 
 
 if tab_option == "Lista de Apontamentos":
+
+    def hard_refresh():
+        # limpa cache de leitura e recarrega do SharePoint
+        st.cache_data.clear()
+        df_loaded, df_logs_loaded = get_sharepoint_workbook()
+        st.session_state["df_apontamentos"] = df_loaded
+        st.session_state["df_logs"] = df_logs_loaded
+
+
+    if st.session_state.get("_do_refresh"):
+        st.session_state["_do_refresh"] = False
+        hard_refresh()
+        st.rerun()
+
+
+    def limpar_filtros_e_refresh():
+        st.session_state["filtro_id"] = ""
+        st.session_state["filtro_estudo"] = "Todos"
+        st.session_state["filtro_status"] = "Todos"
+
+        # marca pra rodar refresh no próximo ciclo (evita mexer em cache + rerun dentro do clique)
+        st.session_state["_do_refresh"] = True
+
+
     # ─────────────────────────────────────────────────────────────
     # 1️⃣  Garante índice interno e coluna visível de ID
     # ─────────────────────────────────────────────────────────────
@@ -582,10 +606,22 @@ if tab_option == "Lista de Apontamentos":
 
     col_btn1, *_ = st.columns(6)
     with col_btn1:
-        if st.button("🔄 Atualizar"):
-            st.cache_data.clear()      
-            st.cache_resource.clear()
-            st.rerun()  
+        st.button("🔄 Atualizar", on_click=limpar_filtros_e_refresh)
+
+    
+    # --- reset de filtros (precisa rodar antes dos widgets existirem) ---
+    if st.session_state.get("_reset_filtros", False):
+        st.session_state["_reset_filtros"] = False
+        st.session_state["filtro_id"] = ""
+        st.session_state["filtro_estudo"] = "Todos"
+        st.session_state["filtro_status"] = "Todos"
+
+        hard_refresh()
+        st.rerun()
+
+
+
+
 
     # ─────────────────────────────────────────────────────────────
     # 3️⃣  Filtros rápidos / seletor de estudo
@@ -605,6 +641,7 @@ if tab_option == "Lista de Apontamentos":
     id_busca = st.text_input(
         "Buscar por ID",
         placeholder="Digite o ID",
+        key="filtro_id",
     )
 
     if id_busca:
@@ -622,13 +659,13 @@ if tab_option == "Lista de Apontamentos":
         opcoes_estudos = ["Todos"] + sorted(
             df["Código do Estudo"].dropna().unique().tolist()
         )
-        estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
+        estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos, key="filtro_estudo",)
 
     with col_filtro_status:
         opcoes_status = ["Todos"] + sorted(
             df["Status"].dropna().unique().tolist()
         )
-        status_sel = st.selectbox("Filtrar por Status", options=opcoes_status)
+        status_sel = st.selectbox("Filtrar por Status", options=opcoes_status,key="filtro_status")
 
     # Aplica filtros
     if estudo_sel != "Todos":
@@ -676,11 +713,22 @@ if tab_option == "Lista de Apontamentos":
         elif col != "ID":
             columns_config[col] = st.column_config.TextColumn(col, disabled=True)
 
+    # key muda quando o filtro muda => evita DOM crash do editor antigo
+    signature = (
+        str(estudo_sel),
+        str(status_sel),
+        str(id_busca),
+        len(df_filtrado),
+        str(df_filtrado["ID"].iloc[0]) if len(df_filtrado) else "empty",
+    )
+    editor_key = "data_editor_" + "_".join(map(lambda x: str(x).replace(" ", ""), signature))
+
+
     df_editado = st.data_editor(
         df_filtrado,
         column_config=columns_config,
         num_rows="fixed",
-        key="data_editor",
+        key=editor_key,
         hide_index=True,  # esconde orig_idx e numeração lateral
     )
 
@@ -804,6 +852,9 @@ if tab_option == "Lista de Apontamentos":
 
 
                 # limpa estados
+                
                 st.session_state.mostrar_campos_finais = False
                 st.session_state.indices_alterados = []
                 st.session_state.pending_logs = []
+                st.session_state["_reset_filtros"] = True
+                st.rerun()
