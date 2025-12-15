@@ -43,7 +43,7 @@ def _sp():
 LOG_SHEET = "logs"
 APONT_SHEET = "apontamentos"
 
-LOG_COLUMNS = ["Data", "ID", "Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável"]
+LOG_COLUMNS = ["Data", "ID", "Estudo","Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável"]
 
 @st.cache_data
 def get_sharepoint_workbook():
@@ -75,6 +75,7 @@ def get_sharepoint_workbook():
 def build_log_rows(
     *,
     id_apontamento: str,
+    estudo: str,
     operacao: str,
     campo: str,
     valor_antes,
@@ -86,6 +87,7 @@ def build_log_rows(
     return {
         "Data": when.strftime("%Y-%m-%d %H:%M:%S"),
         "ID": str(id_apontamento),
+        "Estudo": estudo,
         "Operação": operacao,
         "Campo": campo,
         "Valor Antes": "" if valor_antes is None else str(valor_antes),
@@ -527,6 +529,7 @@ if tab_option == "Formulário":
                 # log de criação (você disse que logs são só de status — aqui registrei o status inicial)
                 log_row = build_log_rows(
                     id_apontamento=next_id,
+                    estudo=selected_protocol,
                     operacao="criação",
                     campo="Status",
                     valor_antes="",
@@ -705,6 +708,7 @@ if tab_option == "Lista de Apontamentos":
 
                     pending_logs.append(build_log_rows(
                         id_apontamento=id_val,
+                        estudo=selected_protocol,
                         operacao="edição",
                         campo="Status",
                         valor_antes=status_original,
