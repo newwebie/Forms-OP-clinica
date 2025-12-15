@@ -9,6 +9,14 @@ import string
 # >>> usa o conector (precisa do arquivo sp_connector.py no repo)
 from sp_connector import SPConnector
 
+from auth_microsoft import (
+    AuthManager,
+    MicrosoftAuth,
+    create_login_page,
+    create_user_header,
+)
+
+
 # === Configurações via secrets (SharePoint - site servicosclinicos) ===
 TENANT_ID = st.secrets["graph"]["tenant_id"]
 CLIENT_ID = st.secrets["graph"]["client_id"]
@@ -21,6 +29,7 @@ APONTAMENTOS  = st.secrets["files"]["apontamentos"]
 ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]    
 COLABORADORES = st.secrets["files"]["colaboradores"]  # 'SANDRA/PROJETO_DASHBOARD/base_cargo.xlsx'
 
+
 # Instância única do conector (cacheada)
 @st.cache_resource
 def _sp():
@@ -29,14 +38,145 @@ def _sp():
         hostname=HOSTNAME, site_path=SITE_PATH, library_name=LIBRARY
     )
 
-# Função para ler o arquivo Excel (Apontamentos) do SharePoint com cache
+
+
+LOG_SHEET = "logs"
+APONT_SHEET = "apontamentos"
+
+LOG_COLUMNS = ["Data", "ID", "Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável"]
+
 @st.cache_data
-def get_sharepoint_file():
+def get_sharepoint_workbook():
+    """
+    Lê as duas abas e devolve (df_apontamentos, df_logs).
+    """
     try:
-        return _sp().read_excel(APONTAMENTOS)
+        x = _sp().read_excel(APONTAMENTOS, sheet_name=[APONT_SHEET, LOG_SHEET])
+
+        df_ap = x.get(APONT_SHEET, pd.DataFrame())
+        df_lg = x.get(LOG_SHEET, pd.DataFrame())
+
+        # garante colunas do log
+        if df_lg.empty:
+            df_lg = pd.DataFrame(columns=LOG_COLUMNS)
+        else:
+            for c in LOG_COLUMNS:
+                if c not in df_lg.columns:
+                    df_lg[c] = None
+            df_lg = df_lg[LOG_COLUMNS]
+
+        return df_ap, df_lg
+
     except Exception as e:
-        st.error(f"Erro ao acessar o arquivo no SharePoint (Graph): {e}")
-        return pd.DataFrame()
+        st.error(f"Erro ao ler workbook (apontamentos/logs): {e}")
+        return pd.DataFrame(), pd.DataFrame(columns=LOG_COLUMNS)
+
+
+def build_log_rows(
+    *,
+    id_apontamento: str,
+    operacao: str,
+    campo: str,
+    valor_antes,
+    valor_depois,
+    responsavel: str,
+    when: datetime | None = None
+) -> dict:
+    when = when or datetime.now()
+    return {
+        "Data": when.strftime("%Y-%m-%d %H:%M:%S"),
+        "ID": str(id_apontamento),
+        "Operação": operacao,
+        "Campo": campo,
+        "Valor Antes": "" if valor_antes is None else str(valor_antes),
+        "Valor Depois": "" if valor_depois is None else str(valor_depois),
+        "Responsável": responsavel_nome,
+    }
+
+
+def update_sharepoint_workbook(
+    *,
+    apontamentos_delta: pd.DataFrame | None = None,   # linhas para update/append em apontamentos
+    logs_append: pd.DataFrame | None = None           # linhas NOVAS para append em logs
+) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """
+    Atualiza a aba apontamentos (update + append por ID) e faz append na aba logs.
+    Depois escreve o workbook inteiro (duas abas) e sobe no SharePoint.
+    """
+    attempts = 0
+    while True:
+        try:
+            df_ap_base, df_logs_base = get_sharepoint_workbook()
+
+            # --- APONTAMENTOS: update/append por ID ---
+            if df_ap_base.empty:
+                df_ap_base = pd.DataFrame()
+
+            if apontamentos_delta is not None and not apontamentos_delta.empty:
+                ap = df_ap_base.copy()
+                delta = apontamentos_delta.copy()
+
+                # normaliza ID
+                if "ID" in ap.columns:
+                    ap["ID"] = ap["ID"].astype(str)
+                if "ID" in delta.columns:
+                    delta["ID"] = delta["ID"].astype(str)
+
+                # usa ID como chave
+                if "ID" not in ap.columns:
+                    ap = ap.copy()
+                    ap["ID"] = None
+
+                ap = ap.set_index("ID", drop=False)
+                delta = delta.set_index("ID", drop=False)
+
+                ap.update(delta)  # atualiza colunas existentes
+                novos = delta.index.difference(ap.index)
+                if len(novos) > 0:
+                    ap = pd.concat([ap, delta.loc[novos]], axis=0)
+
+                df_ap_base = ap.reset_index(drop=True)
+
+            # --- LOGS: append ---
+            if logs_append is not None and not logs_append.empty:
+                lg = df_logs_base.copy()
+                add = logs_append.copy()
+
+                # garante colunas e ordem
+                for c in LOG_COLUMNS:
+                    if c not in lg.columns:
+                        lg[c] = None
+                    if c not in add.columns:
+                        add[c] = None
+                lg = lg[LOG_COLUMNS]
+                add = add[LOG_COLUMNS]
+
+                df_logs_base = pd.concat([lg, add], ignore_index=True)
+
+            # --- escreve workbook inteiro (2 abas) ---
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_ap_base.to_excel(writer, index=False, sheet_name=APONT_SHEET)
+                df_logs_base.to_excel(writer, index=False, sheet_name=LOG_SHEET)
+
+            output.seek(0)
+            _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
+
+            # limpa cache de leitura (porque mudou)
+            st.cache_data.clear()
+
+            return df_ap_base, df_logs_base
+
+        except Exception as e:
+            attempts += 1
+            msg = str(e)
+            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
+                st.warning("Conflito/limite de chamadas. Tentando novamente em 5 segundos...")
+                time.sleep(5)
+                continue
+            st.error(f"Erro ao salvar o apontamento: {msg}")
+            return None
+
 
 # Função para ler o arquivo CSV (Estudos) do SharePoint com cache
 @st.cache_data
@@ -70,49 +210,30 @@ def generate_custom_id(existing_ids: set[str]) -> str:
             return new_id
         
 
-# Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
-    attempts = 0
-    while True:
-        try:
-            # Carrega versão mais recente do arquivo
-            base_df = _sp().read_excel(APONTAMENTOS)
-            if not base_df.empty:
-                base_df["ID"] = base_df["ID"].astype(str)
-                base_df.set_index("ID", inplace=True)
-            else:
-                base_df = pd.DataFrame().set_index("ID")
 
-            df = df.copy()
-            if "ID" in df.columns:
-                df["ID"] = df["ID"].astype(str)
-                df.set_index("ID", inplace=True)
+# -------------------------------------------------
+# Autenticação e contexto do usuário
+# -------------------------------------------------
+auth = MicrosoftAuth()
 
-            # Atualiza linhas existentes e adiciona novas
-            base_df.update(df)
-            novos = df.index.difference(base_df.index)
-            if len(novos) > 0:
-                base_df = pd.concat([base_df, df.loc[novos]])
 
-            base_df.reset_index(inplace=True)
+logged_in = create_login_page(auth)
+if not logged_in:
+    st.stop()
 
-            output = io.BytesIO()
-            base_df.to_excel(output, index=False)
-            output.seek(0)
-            _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
 
-            st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
-            return base_df
-        except Exception as e:
-            attempts += 1
-            msg = str(e)
-            # 409/412 = conflito de versão | 429 = throttling
-            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
-                st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
-                time.sleep(5)
-                continue
-            st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
-            return None
+# Garantir token válido durante a sessão
+AuthManager.check_and_refresh_token(auth)
+create_user_header()
+
+user = AuthManager.get_current_user() or {}
+display_name = user.get("displayName", "Usuário")
+user_email = (user.get("mail") or user.get("userPrincipalName") or "").lower()
+
+
+st.session_state["display_name"] = display_name
+st.session_state["user_email"] = user_email
+
 
 # Carregar dados iniciais
 df_study = get_sharepoint_file_estudos_csv()
@@ -121,7 +242,7 @@ colaboradores_df = colaboradores_excel()
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
-    df_loaded = get_sharepoint_file()
+    df_loaded, df_logs_loaded = get_sharepoint_workbook()
     
     # Fill missing or invalid IDs to prevent NaN issues
     if not df_loaded.empty:
@@ -197,7 +318,7 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = tab_names[0]
 
 tab_option = st.radio(
-    label="Navegação",  
+    label="",  
     options=tab_names,
     horizontal=True,
     key="active_tab",
@@ -225,7 +346,6 @@ if tab_option == "Formulário":
             research_name = ""
         st.text_input("Nome da Pesquisa", value=research_name, disabled=True)
         
-        responsavel = st.text_input("Responsável pelo Apontamento", key="responsavel_apontamento")
         
         origem = st.selectbox(
             "Origem Do Apontamento", 
@@ -268,12 +388,13 @@ if tab_option == "Formulário":
         
         # Obtém o valor final do documento usando a função
         documento_final = get_final_documento()
+
+        pp_options = ["N/A", "Outros"] + [f"PP{i:02d}" for i in range(1, 100)] + [f"PP{i}" for i in range(100, 1000)]
+
+        participante = st.selectbox("Participante", pp_options, key="participante")
         
 
-        participante = st.selectbox("Participante", 
-            ['N/A', 'Outros', 'PP01', 'PP02', 'PP03', 'PP04', 'PP05', 'PP06', 'PP07', 'PP08', 'PP09', 'PP10', 'PP11', 'PP12', 'PP13', 'PP14', 'PP15', 'PP16', 'PP17', 'PP18', 'PP19', 'PP20', 'PP21', 'PP22', 'PP23', 'PP24', 'PP25', 'PP26', 'PP27', 'PP28', 'PP29', 'PP30', 'PP31', 'PP32', 'PP33', 'PP34', 'PP35', 'PP36', 'PP37', 'PP38', 'PP39', 'PP40', 'PP41', 'PP42', 'PP43', 'PP44', 'PP45', 'PP46', 'PP47', 'PP48', 'PP49', 'PP50', 'PP51', 'PP52', 'PP53', 'PP54', 'PP55', 'PP56', 'PP57', 'PP58', 'PP59', 'PP60', 'PP61', 'PP62', 'PP63', 'PP64', 'PP65', 'PP66', 'PP67', 'PP68', 'PP69', 'PP70', 'PP71', 'PP72', 'PP73', 'PP74', 'PP75', 'PP76', 'PP77', 'PP78', 'PP79', 'PP80', 'PP81', 'PP82', 'PP83', 'PP84', 'PP85', 'PP86', 'PP87', 'PP88', 'PP89', 'PP90', 'PP91', 'PP92', 'PP93', 'PP94', 'PP95', 'PP96', 'PP97', 'PP98', 'PP99', 'PP100', 'PP101', 'PP102', 'PP103', 'PP104', 'PP105', 'PP106', 'PP107', 'PP108', 'PP109', 'PP110', 'PP111', 'PP112', 'PP113', 'PP114', 'PP115', 'PP116', 'PP117', 'PP118', 'PP119', 'PP120', 'PP121', 'PP122', 'PP123', 'PP124', 'PP125', 'PP126', 'PP127', 'PP128', 'PP129', 'PP130', 'PP131', 'PP132', 'PP133', 'PP134', 'PP135', 'PP136', 'PP137', 'PP138', 'PP139', 'PP140', 'PP141', 'PP142', 'PP143', 'PP144', 'PP145', 'PP146', 'PP147', 'PP148', 'PP149', 'PP150', 'PP151', 'PP152', 'PP153', 'PP154', 'PP155', 'PP156', 'PP157', 'PP158', 'PP159', 'PP160', 'PP161', 'PP162', 'PP163', 'PP164', 'PP165', 'PP166', 'PP167', 'PP168', 'PP169', 'PP170', 'PP171', 'PP172', 'PP173', 'PP174', 'PP175', 'PP176', 'PP177', 'PP178', 'PP179', 'PP180', 'PP181', 'PP182', 'PP183', 'PP184', 'PP185', 'PP186', 'PP187', 'PP188', 'PP189', 'PP190', 'PP191', 'PP192', 'PP193', 'PP194', 'PP195', 'PP196', 'PP197', 'PP198', 'PP199', 'PP200', 'PP201', 'PP202', 'PP203', 'PP204', 'PP205', 'PP206', 'PP207', 'PP208', 'PP209', 'PP210', 'PP211', 'PP212', 'PP213', 'PP214', 'PP215', 'PP216', 'PP217', 'PP218', 'PP219', 'PP220', 'PP221', 'PP222', 'PP223', 'PP224', 'PP225', 'PP226', 'PP227', 'PP228', 'PP229', 'PP230', 'PP231', 'PP232', 'PP233', 'PP234', 'PP235', 'PP236', 'PP237', 'PP238', 'PP239', 'PP240', 'PP241', 'PP242', 'PP243', 'PP244', 'PP245', 'PP246', 'PP247', 'PP248', 'PP249', 'PP250', 'PP251', 'PP252', 'PP253', 'PP254', 'PP255', 'PP256', 'PP257', 'PP258', 'PP259', 'PP260', 'PP261', 'PP262', 'PP263', 'PP264', 'PP265', 'PP266', 'PP267', 'PP268', 'PP269', 'PP270', 'PP271', 'PP272', 'PP273', 'PP274', 'PP275', 'PP276', 'PP277', 'PP278', 'PP279', 'PP280', 'PP281', 'PP282', 'PP283', 'PP284', 'PP285', 'PP286', 'PP287', 'PP288', 'PP289', 'PP290', 'PP291', 'PP292', 'PP293', 'PP294', 'PP295', 'PP296', 'PP297', 'PP298', 'PP299', 'PP300', 'PP301', 'PP302', 'PP303', 'PP304', 'PP305', 'PP306', 'PP307', 'PP308', 'PP309', 'PP310', 'PP311', 'PP312', 'PP313', 'PP314', 'PP315', 'PP316', 'PP317', 'PP318', 'PP319', 'PP320', 'PP321', 'PP322', 'PP323', 'PP324', 'PP325', 'PP326', 'PP327', 'PP328', 'PP329', 'PP330', 'PP331', 'PP332', 'PP333', 'PP334', 'PP335', 'PP336', 'PP337', 'PP338', 'PP339', 'PP340', 'PP341', 'PP342', 'PP343', 'PP344', 'PP345', 'PP346', 'PP347', 'PP348', 'PP349', 'PP350', 'PP351', 'PP352', 'PP353', 'PP354', 'PP355', 'PP356', 'PP357', 'PP358', 'PP359', 'PP360', 'PP361', 'PP362', 'PP363', 'PP364', 'PP365', 'PP366', 'PP367', 'PP368', 'PP369', 'PP370', 'PP371', 'PP372', 'PP373', 'PP374', 'PP375', 'PP376', 'PP377', 'PP378', 'PP379', 'PP380', 'PP381', 'PP382', 'PP383', 'PP384', 'PP385', 'PP386', 'PP387', 'PP388', 'PP389', 'PP390', 'PP391', 'PP392', 'PP393', 'PP394', 'PP395', 'PP396', 'PP397', 'PP398', 'PP399', 'PP400', 'PP401', 'PP402', 'PP403', 'PP404', 'PP405', 'PP406', 'PP407', 'PP408', 'PP409', 'PP410', 'PP411', 'PP412', 'PP413', 'PP414', 'PP415', 'PP416', 'PP417', 'PP418', 'PP419', 'PP420', 'PP421', 'PP422', 'PP423', 'PP424', 'PP425', 'PP426', 'PP427', 'PP428', 'PP429', 'PP430', 'PP431', 'PP432', 'PP433', 'PP434', 'PP435', 'PP436', 'PP437', 'PP438', 'PP439', 'PP440', 'PP441', 'PP442', 'PP443', 'PP444', 'PP445', 'PP446', 'PP447', 'PP448', 'PP449', 'PP450', 'PP451', 'PP452', 'PP453', 'PP454', 'PP455', 'PP456', 'PP457', 'PP458', 'PP459', 'PP460', 'PP461', 'PP462', 'PP463', 'PP464', 'PP465', 'PP466', 'PP467', 'PP468', 'PP469', 'PP470', 'PP471', 'PP472', 'PP473', 'PP474', 'PP475', 'PP476', 'PP477', 'PP478', 'PP479', 'PP480', 'PP481', 'PP482', 'PP483', 'PP484', 'PP485', 'PP486', 'PP487', 'PP488', 'PP489', 'PP490', 'PP491', 'PP492', 'PP493', 'PP494', 'PP495', 'PP496', 'PP497', 'PP498', 'PP499', 'PP500', 'PP501', 'PP502', 'PP503', 'PP504', 'PP505', 'PP506', 'PP507', 'PP508', 'PP509', 'PP510', 'PP511', 'PP512', 'PP513', 'PP514', 'PP515', 'PP516', 'PP517', 'PP518', 'PP519', 'PP520', 'PP521', 'PP522', 'PP523', 'PP524', 'PP525', 'PP526', 'PP527', 'PP528', 'PP529', 'PP530', 'PP531', 'PP532', 'PP533', 'PP534', 'PP535', 'PP536', 'PP537', 'PP538', 'PP539', 'PP540', 'PP541', 'PP542', 'PP543', 'PP544', 'PP545', 'PP546', 'PP547', 'PP548', 'PP549', 'PP550', 'PP551', 'PP552', 'PP553', 'PP554', 'PP555', 'PP556', 'PP557', 'PP558', 'PP559', 'PP560', 'PP561', 'PP562', 'PP563', 'PP564', 'PP565', 'PP566', 'PP567', 'PP568', 'PP569', 'PP570', 'PP571', 'PP572', 'PP573', 'PP574', 'PP575', 'PP576', 'PP577', 'PP578', 'PP579', 'PP580', 'PP581', 'PP582', 'PP583', 'PP584', 'PP585', 'PP586', 'PP587', 'PP588', 'PP589', 'PP590', 'PP591', 'PP592', 'PP593', 'PP594', 'PP595', 'PP596', 'PP597', 'PP598', 'PP599', 'PP600', 'PP601', 'PP602', 'PP603', 'PP604', 'PP605', 'PP606', 'PP607', 'PP608', 'PP609', 'PP610', 'PP611', 'PP612', 'PP613', 'PP614', 'PP615', 'PP616', 'PP617', 'PP618', 'PP619', 'PP620', 'PP621', 'PP622', 'PP623', 'PP624', 'PP625', 'PP626', 'PP627', 'PP628', 'PP629', 'PP630', 'PP631', 'PP632', 'PP633', 'PP634', 'PP635', 'PP636', 'PP637', 'PP638', 'PP639', 'PP640', 'PP641', 'PP642', 'PP643', 'PP644', 'PP645', 'PP646', 'PP647', 'PP648', 'PP649', 'PP650', 'PP651', 'PP652', 'PP653', 'PP654', 'PP655', 'PP656', 'PP657', 'PP658', 'PP659', 'PP660', 'PP661', 'PP662', 'PP663', 'PP664', 'PP665', 'PP666', 'PP667', 'PP668', 'PP669', 'PP670', 'PP671', 'PP672', 'PP673', 'PP674', 'PP675', 'PP676', 'PP677', 'PP678', 'PP679', 'PP680', 'PP681', 'PP682', 'PP683', 'PP684', 'PP685', 'PP686', 'PP687', 'PP688', 'PP689', 'PP690', 'PP691', 'PP692', 'PP693', 'PP694', 'PP695', 'PP696', 'PP697', 'PP698', 'PP699', 'PP700', 'PP701', 'PP702', 'PP703', 'PP704', 'PP705', 'PP706', 'PP707', 'PP708', 'PP709', 'PP710', 'PP711', 'PP712', 'PP713', 'PP714', 'PP715', 'PP716', 'PP717', 'PP718', 'PP719', 'PP720', 'PP721', 'PP722', 'PP723', 'PP724', 'PP725', 'PP726', 'PP727', 'PP728', 'PP729', 'PP730', 'PP731', 'PP732', 'PP733', 'PP734', 'PP735', 'PP736', 'PP737', 'PP738', 'PP739', 'PP740', 'PP741', 'PP742', 'PP743', 'PP744', 'PP745', 'PP746', 'PP747', 'PP748', 'PP749', 'PP750', 'PP751', 'PP752', 'PP753', 'PP754', 'PP755', 'PP756', 'PP757', 'PP758', 'PP759', 'PP760', 'PP761', 'PP762', 'PP763', 'PP764', 'PP765', 'PP766', 'PP767', 'PP768', 'PP769', 'PP770', 'PP771', 'PP772', 'PP773', 'PP774', 'PP775', 'PP776', 'PP777', 'PP778', 'PP779', 'PP780', 'PP781', 'PP782', 'PP783', 'PP784', 'PP785', 'PP786', 'PP787', 'PP788', 'PP789', 'PP790', 'PP791', 'PP792', 'PP793', 'PP794', 'PP795', 'PP796', 'PP797', 'PP798', 'PP799', 'PP800', 'PP801', 'PP802', 'PP803', 'PP804', 'PP805', 'PP806', 'PP807', 'PP808', 'PP809', 'PP810', 'PP811', 'PP812', 'PP813', 'PP814', 'PP815', 'PP816', 'PP817', 'PP818', 'PP819', 'PP820', 'PP821', 'PP822', 'PP823', 'PP824', 'PP825', 'PP826', 'PP827', 'PP828', 'PP829', 'PP830', 'PP831', 'PP832', 'PP833', 'PP834', 'PP835', 'PP836', 'PP837', 'PP838', 'PP839', 'PP840', 'PP841', 'PP842', 'PP843', 'PP844', 'PP845', 'PP846', 'PP847', 'PP848', 'PP849', 'PP850', 'PP851', 'PP852', 'PP853', 'PP854', 'PP855', 'PP856', 'PP857', 'PP858', 'PP859', 'PP860', 'PP861', 'PP862', 'PP863', 'PP864', 'PP865', 'PP866', 'PP867', 'PP868', 'PP869', 'PP870', 'PP871', 'PP872', 'PP873', 'PP874', 'PP875', 'PP876', 'PP877', 'PP878', 'PP879', 'PP880', 'PP881', 'PP882', 'PP883', 'PP884', 'PP885', 'PP886', 'PP887', 'PP888', 'PP889', 'PP890', 'PP891', 'PP892', 'PP893', 'PP894', 'PP895', 'PP896', 'PP897', 'PP898', 'PP899', 'PP900', 'PP901', 'PP902', 'PP903', 'PP904', 'PP905', 'PP906', 'PP907', 'PP908', 'PP909', 'PP910', 'PP911', 'PP912', 'PP913', 'PP914', 'PP915', 'PP916', 'PP917', 'PP918', 'PP919', 'PP920', 'PP921', 'PP922', 'PP923', 'PP924', 'PP925', 'PP926', 'PP927', 'PP928', 'PP929', 'PP930', 'PP931', 'PP932', 'PP933', 'PP934', 'PP935', 'PP936', 'PP937', 'PP938', 'PP939', 'PP940', 'PP941', 'PP942', 'PP943', 'PP944', 'PP945', 'PP946', 'PP947', 'PP948', 'PP949', 'PP950', 'PP951', 'PP952', 'PP953', 'PP954', 'PP955', 'PP956', 'PP957', 'PP958', 'PP959', 'PP960', 'PP961', 'PP962', 'PP963', 'PP964', 'PP965', 'PP966', 'PP967', 'PP968', 'PP969', 'PP970', 'PP971', 'PP972', 'PP973', 'PP974', 'PP975', 'PP976', 'PP977', 'PP978', 'PP979', 'PP980', 'PP981', 'PP982', 'PP983', 'PP984', 'PP985', 'PP986', 'PP987', 'PP988', 'PP989', 'PP990', 'PP991', 'PP992', 'PP993', 'PP994', 'PP995', 'PP996', 'PP997', 'PP998', 'PP999']
-            , key="participante")
-        
+
         if st.session_state["participante"] == "Outros":
             st.text_input("Indique os PPs", key="pp_custom", placeholder='Neste formato: PP01, PP02')
 
@@ -348,7 +469,7 @@ if tab_option == "Formulário":
         
         if submit:
             # Validação dos campos obrigatórios
-            if selected_protocol == "Digite o codigo do estudo" or participante.strip() == "" or apontamento.strip() == "" or responsavel.strip() == "":
+            if selected_protocol == "Digite o codigo do estudo" or participante.strip() == "" or apontamento.strip() == "":
                 st.error("Por favor, preencha os campos obrigatórios: Código do Estudo, Participante, Responsável e Apontamento.")
             elif status == "VERIFICANDO" and verificador_nome.strip() == "":
                 st.error("Somente o Guilherme Gonçalves pode usar esse status!.")
@@ -356,9 +477,6 @@ if tab_option == "Formulário":
                 st.error("Por favor, defina um status antes de submeter o apontamento!")
             elif status == "NÃO APLICÁVEL" and justificativa.strip() == "":
                 st.error("Por favor, preencha o campo 'Justificativa'!")
-            elif responsavel == "Selecione um colaborador":
-                st.warning("Por favor, selecione o colaborador responsável antes de salvar.")
-                st.stop()
             elif correcao == "Selecione um colaborador":
                 st.warning("Por favor, selecione o colaborador responsável pela correção antes de salvar.")
                 st.stop()
@@ -372,6 +490,8 @@ if tab_option == "Formulário":
 
                 # Usa o ID gerado previamente para este apontamento
                 next_id = st.session_state.get("generated_id")
+
+                responsavel_nome = st.session_state.get("display_name")
                 
                 
 
@@ -380,7 +500,7 @@ if tab_option == "Formulário":
                     "Código do Estudo": selected_protocol,
                     "Nome da Pesquisa": research_name,
                     "Data do Apontamento": data_atual,
-                    "Responsável Pelo Apontamento": responsavel,
+                    "Responsável Pelo Apontamento": responsavel_nome,
                     "Origem Do Apontamento": st.session_state["origem"],
                     "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
                     "Participante": pp_final,
@@ -401,12 +521,31 @@ if tab_option == "Formulário":
 
 
                 novo_df = pd.DataFrame([novo_apontamento])
-                df_atualizado = update_sharepoint_file(novo_df)
-                if df_atualizado is not None:
+                # operador da ação (quem clicou/salvou)
+                
+
+                # log de criação (você disse que logs são só de status — aqui registrei o status inicial)
+                log_row = build_log_rows(
+                    id_apontamento=next_id,
+                    operacao="criação",
+                    campo="Status",
+                    valor_antes="",
+                    valor_depois=st.session_state["status"],
+                    responsavel=responsavel_nome,
+                    when=data_atual,
+                )
+                df_logs_add = pd.DataFrame([log_row])
+
+                res = update_sharepoint_workbook(apontamentos_delta=novo_df, logs_append=df_logs_add)
+                if res is not None:
+                    df_atualizado, df_logs_atualizado = res
                     st.session_state["df_apontamentos"] = df_atualizado
-                    st.session_state["generated_id"] = generate_custom_id(
-                        set(df_atualizado["ID"].astype(str))
-                    )
+                    st.session_state["generated_id"] = generate_custom_id(set(df_atualizado["ID"].astype(str)))
+                    st.session_state["df_logs"] = df_logs_atualizado  # <<< mantém logs atualizados localmente
+                    st.success("✅ Apontamento submetido com sucesso!")
+
+
+
                 
 
 
@@ -453,11 +592,47 @@ if tab_option == "Lista de Apontamentos":
     df_filtrado = df.copy()
 
     campo_id = st.text
-    opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique().tolist())
-    estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
 
+    st.markdown("")
+
+
+        # 🔎 Filtro por ID (linha inteira)
+    id_busca = st.text_input(
+        "Buscar por ID",
+        placeholder="Digite o ID",
+    )
+
+    if id_busca:
+        df_filtrado = df_filtrado[
+            df_filtrado["ID"].astype(str).str.contains(id_busca, case=False, na=False)
+        ]
+
+    # Linha com 2 colunas: Estudo (esquerda) e Status (direita)
+    col_filtro_estudo, col_filtro_status = st.columns(2)
+
+        # Linha com 2 colunas: Estudo (esquerda) e Status (direita)
+    col_filtro_estudo, col_filtro_status = st.columns(2)
+
+    with col_filtro_estudo:
+        opcoes_estudos = ["Todos"] + sorted(
+            df["Código do Estudo"].dropna().unique().tolist()
+        )
+        estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos)
+
+    with col_filtro_status:
+        opcoes_status = ["Todos"] + sorted(
+            df["Status"].dropna().unique().tolist()
+        )
+        status_sel = st.selectbox("Filtrar por Status", options=opcoes_status)
+
+    # Aplica filtros
     if estudo_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado["Código do Estudo"] == estudo_sel]
+
+    if status_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["Status"] == status_sel]
+
+
 
     # Colunas visíveis (ID primeiro)
     cols_display = [
@@ -511,25 +686,43 @@ if tab_option == "Lista de Apontamentos":
         if st.button("Status modificados"):
             alterado = False
             indices_alterados = []
-            df_atualizado = df.copy()
+            pending_logs = []
+
+            responsavel_nome = st.session_state.get("display_name")
+            agora = datetime.now()
+
+            # cria um mapa do status original por ID (do df_filtrado)
+            status_original_por_id = dict(zip(df_filtrado["ID"].astype(str), df_filtrado["Status"]))
 
             for i in range(len(df_filtrado)):
-                status_original = df_filtrado.iloc[i]["Status"]
+                id_val = str(df_filtrado.iloc[i]["ID"])
+                status_original = status_original_por_id.get(id_val, "")
                 status_novo = df_editado.iloc[i]["Status"]
 
                 if status_novo != status_original:
                     alterado = True
-                    id_val = df_filtrado.iloc[i]["ID"]    # pega o ID visível
-
-                    # Atualiza no DataFrame base usando a coluna ID
-                    df.loc[df["ID"] == id_val, "Status"] = status_novo
                     indices_alterados.append(id_val)
+
+                    pending_logs.append(build_log_rows(
+                        id_apontamento=id_val,
+                        operacao="edição",
+                        campo="Status",
+                        valor_antes=status_original,
+                        valor_depois=status_novo,
+                        responsavel=responsavel_nome,
+                        when=agora,
+                    ))
+
+                    # aplica a mudança no df base (session)
+                    df.loc[df["ID"].astype(str) == id_val, "Status"] = status_novo
 
             if not alterado:
                 st.warning("Nenhuma alteração de status detectada.")
             else:
                 st.session_state.mostrar_campos_finais = True
                 st.session_state.indices_alterados = indices_alterados
+                st.session_state.pending_logs = pending_logs
+
 
 
     # ─────────────────────────────────────────────────────────────
@@ -545,6 +738,14 @@ if tab_option == "Lista de Apontamentos":
         for id_val in indices_alterados:
             status_novo = df.loc[df["ID"] == id_val, "Status"].iloc[0]
             st.markdown(f"#### Apontamento ID {id_val}")
+
+            if status_novo == "VERIFICANDO":
+                st.warning(
+                    "⚠️ Não é possível alterar o status para **VERIFICANDO** pelo link de apontamentos. "
+                    "Essa mudança só pode ser feita no **Painel ADM**."
+                )
+                st.markdown("---")
+                continue  # Pula para o próximo apontamento
 
             if status_novo in ["REALIZADO", "NÃO APLICÁVEL"]:
                 key_data = f"data_conclusao_{id_val}"
@@ -567,23 +768,33 @@ if tab_option == "Lista de Apontamentos":
         # Responsável pela atualização
         colaboradores_eo = colaboradores_df[colaboradores_df["Departamento"] == "Excelência Operacional"]
         resp_opts = ["Selecione um Colaborador"] + colaboradores_eo["Nome Completo do Profissional"].tolist()
-        responsavel = st.selectbox("Responsável pela Atualização", options=resp_opts, key="responsavel_final")
+
 
         if st.button("Submeter mudanças"):
+            responsavel_nome = st.session_state.get("display_name")
             if linhas_faltando:
                 st.error("Campos obrigatórios pendentes:\n\n" + "\n".join(linhas_faltando))
-            elif responsavel == "Selecione um Colaborador":
                 st.warning("Por favor, selecione um responsável!")
             else:
-                df.loc[df["ID"].isin(indices_alterados), "Verificador"] = responsavel
+                df.loc[df["ID"].isin(indices_alterados), "Responsável Atualização"] = responsavel_nome
+                df.loc[df["ID"].isin(indices_alterados), "Data Atualização"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # Salva de volta
-                rows_to_save = df[df["ID"].isin(indices_alterados)]
-                df_atualizado = update_sharepoint_file(rows_to_save)
-                if df_atualizado is not None:
+                rows_to_save = df[df["ID"].isin(indices_alterados)].copy()
+
+                # logs preparados no passo 5
+                pending_logs = st.session_state.get("pending_logs", [])
+                df_logs_add = pd.DataFrame(pending_logs) if pending_logs else pd.DataFrame(columns=LOG_COLUMNS)
+
+                res = update_sharepoint_workbook(apontamentos_delta=rows_to_save, logs_append=df_logs_add)
+                if res is not None:
+                    df_atualizado, df_logs_atualizado = res
                     st.session_state["df_apontamentos"] = df_atualizado
+                    st.session_state["df_logs"] = df_logs_atualizado  # <<< mantém logs atualizados localmente
+                    st.success("✅ Apontamento submetido com sucesso!")
 
-                # Limpa estados
+
+
+                # limpa estados
                 st.session_state.mostrar_campos_finais = False
                 st.session_state.indices_alterados = []
-                st.session_state.df_atualizado = None
+                st.session_state.pending_logs = []
