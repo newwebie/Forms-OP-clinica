@@ -45,7 +45,7 @@ APONT_SHEET = "apontamentos"
 
 LOG_COLUMNS = ["Data", "ID", "Estudo","Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável"]
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def get_sharepoint_workbook():
     """
     Lê as duas abas e devolve (df_apontamentos, df_logs).
@@ -181,7 +181,7 @@ def update_sharepoint_workbook(
 
 
 # Função para ler o arquivo CSV (Estudos) do SharePoint com cache
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def get_sharepoint_file_estudos_csv():
     try:
         return _sp().read_csv(ESTUDOS_CSV)
@@ -189,7 +189,7 @@ def get_sharepoint_file_estudos_csv():
         st.error(f"Erro ao acessar o arquivo CSV de estudos no SharePoint (Graph): {e}")
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def colaboradores_excel():
     try:
         data = _sp().download(COLABORADORES)
@@ -211,6 +211,10 @@ def generate_custom_id(existing_ids: set[str]) -> str:
         if new_id not in existing_ids:
             return new_id
         
+# Função para carregar o workbook com spinner
+def load_workbook_with_spinner(msg="📘 Carregando apontamentos..."):
+    with st.spinner(msg):
+        return get_sharepoint_workbook()
 
 
 # -------------------------------------------------
@@ -238,13 +242,19 @@ st.session_state["user_email"] = user_email
 
 
 # Carregar dados iniciais
-df_study = get_sharepoint_file_estudos_csv()
-colaboradores_df = colaboradores_excel()
+with st.spinner("📥 Carregando bases do SharePoint..."):
+    df_study = get_sharepoint_file_estudos_csv()
+    colaboradores_df = colaboradores_excel()
+
 
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
-    df_loaded, df_logs_loaded = get_sharepoint_workbook()
+    df_loaded, df_logs_loaded = load_workbook_with_spinner(
+    "📘 Carregando apontamentos e logs..."
+)
+
+
     
     # Fill missing or invalid IDs to prevent NaN issues
     if not df_loaded.empty:
@@ -541,7 +551,9 @@ if tab_option == "Formulário":
                 )
                 df_logs_add = pd.DataFrame([log_row])
 
-                res = update_sharepoint_workbook(apontamentos_delta=novo_df, logs_append=df_logs_add)
+                with st.spinner("💾 Salvando apontamento no SharePoint..."):
+                    res = update_sharepoint_workbook(apontamentos_delta=novo_df, logs_append=df_logs_add)
+
                 if res is not None:
                     df_atualizado, df_logs_atualizado = res
                     st.session_state["df_apontamentos"] = df_atualizado
@@ -558,11 +570,13 @@ if tab_option == "Formulário":
 if tab_option == "Lista de Apontamentos":
 
     def hard_refresh():
-        # limpa cache de leitura e recarrega do SharePoint
         st.cache_data.clear()
-        df_loaded, df_logs_loaded = get_sharepoint_workbook()
+        df_loaded, df_logs_loaded = load_workbook_with_spinner(
+            "🔄 Atualizando dados do SharePoint..."
+        )
         st.session_state["df_apontamentos"] = df_loaded
         st.session_state["df_logs"] = df_logs_loaded
+
 
 
     if st.session_state.get("_do_refresh"):
@@ -841,13 +855,14 @@ if tab_option == "Lista de Apontamentos":
                 # logs preparados no passo 5
                 pending_logs = st.session_state.get("pending_logs", [])
                 df_logs_add = pd.DataFrame(pending_logs) if pending_logs else pd.DataFrame(columns=LOG_COLUMNS)
-
-                res = update_sharepoint_workbook(apontamentos_delta=rows_to_save, logs_append=df_logs_add)
-                if res is not None:
-                    df_atualizado, df_logs_atualizado = res
-                    st.session_state["df_apontamentos"] = df_atualizado
-                    st.session_state["df_logs"] = df_logs_atualizado  # <<< mantém logs atualizados localmente
-                    st.success("✅ Apontamento submetido com sucesso!")
+                
+                with st.spinner("💾 Salvando apontamento no SharePoint..."):
+                    res = update_sharepoint_workbook(apontamentos_delta=rows_to_save, logs_append=df_logs_add)
+                    if res is not None:
+                        df_atualizado, df_logs_atualizado = res
+                        st.session_state["df_apontamentos"] = df_atualizado
+                        st.session_state["df_logs"] = df_logs_atualizado  # <<< mantém logs atualizados localmente
+                        st.success("✅ Apontamento submetido com sucesso!")
 
 
 

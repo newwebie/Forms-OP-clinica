@@ -658,7 +658,7 @@ def create_login_page(auth: MicrosoftAuth) -> bool:
         '<div class="login-inner">',
         '<div class="login-card">',
         f'{logo_html}',
-        '<h1 class="login-title" style="text-align: center; color: black;">CONTROLE DE APONTAMENTOS</h1>',
+        '<h1 class="login-title" style="text-align: center; color: black;">  CONTROLE DE   APONTAMENTOS</h1>',
         '<p class="login-subtitle"></br></p>',
         f'{highlights_html}',
         attempts_html if attempts_html else '',
