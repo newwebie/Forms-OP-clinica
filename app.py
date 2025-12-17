@@ -43,7 +43,7 @@ def _sp():
 LOG_SHEET = "logs"
 APONT_SHEET = "apontamentos"
 
-LOG_COLUMNS = ["Data", "ID", "Estudo","Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável"]
+LOG_COLUMNS = ["Data", "ID", "Estudo","Operação", "Campo", "Valor Antes", "Valor Depois", "Responsável Indicado", "Responsável"]
 
 @st.cache_data(show_spinner=False)
 def get_sharepoint_workbook():
@@ -80,7 +80,8 @@ def build_log_rows(
     campo: str,
     valor_antes,
     valor_depois,
-    responsavel: str,
+    responsavel_nome: str,
+    responsavel_indicado: str,
     when: datetime | None = None
 ) -> dict:
     when = when or datetime.now()
@@ -93,6 +94,7 @@ def build_log_rows(
         "Valor Antes": "" if valor_antes is None else str(valor_antes),
         "Valor Depois": "" if valor_depois is None else str(valor_depois),
         "Responsável": responsavel_nome,
+        "Responsável Indicado": responsavel_indicado,
     }
 
 
@@ -172,12 +174,32 @@ def update_sharepoint_workbook(
         except Exception as e:
             attempts += 1
             msg = str(e)
-            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
-                st.warning("Conflito/limite de chamadas. Tentando novamente em 5 segundos...")
+
+            # 1) arquivo bloqueado / aberto no Excel (mensagens variam)
+            lock_signals = ["locked", "lock", "423", "resourceLocked", "is locked", "The resource you are attempting to access is locked"]
+            conflict_signals = ["409", "412", "precondition", "etag", "conflict"]
+
+            if any(s.lower() in msg.lower() for s in lock_signals):
+                st.warning(
+                    "⚠️ Não foi possível salvar porque o arquivo parece estar aberto no Excel (bloqueado para edição).\n\n"
+                    "👉 Feche o arquivo no computador (e em qualquer outro lugar onde esteja aberto) e tente salvar novamente."
+                )
+                return None
+
+            # 2) conflitos/transientes (mantém retry)
+            if any(s.lower() in msg.lower() for s in conflict_signals) and attempts < 5:
+                st.warning("Conflito detectado no SharePoint. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
+
+            if "429" in msg and attempts < 5:
+                st.warning("Muitas requisições ao SharePoint. Tentando novamente em 5 segundos...")
+                time.sleep(5)
+                continue
+
             st.error(f"Erro ao salvar o apontamento: {msg}")
             return None
+
 
 
 # Função para ler o arquivo CSV (Estudos) do SharePoint com cache
@@ -527,7 +549,8 @@ if tab_option == "Formulário":
                     "Data Resolução": resolucao,
                     "Plantão": plantao,
                     "Departamento": departamento,
-                    "Tempo de casa": status_prof
+                    "Tempo de casa": status_prof,
+                    "Responsável Indicado": None
                 }
                 
 
@@ -546,8 +569,9 @@ if tab_option == "Formulário":
                     campo="Status",
                     valor_antes="",
                     valor_depois=st.session_state["status"],
-                    responsavel=responsavel_nome,
+                    responsavel_nome=responsavel_nome,
                     when=data_atual,
+                    responsavel_indicado=None,
                 )
                 df_logs_add = pd.DataFrame([log_row])
 
@@ -638,7 +662,7 @@ if tab_option == "Lista de Apontamentos":
 
 
     # ─────────────────────────────────────────────────────────────
-    # 3️⃣  Filtros rápidos / seletor de estudo
+    # 3️⃣  Filtros rápidos 
     # ─────────────────────────────────────────────────────────────
     if df.empty:
         st.info("Nenhum apontamento encontrado!")
@@ -760,6 +784,8 @@ if tab_option == "Lista de Apontamentos":
 
             # cria um mapa do status original por ID (do df_filtrado)
             status_original_por_id = dict(zip(df_filtrado["ID"].astype(str), df_filtrado["Status"]))
+            st.session_state["status_original_por_id"] = status_original_por_id
+
 
             for i in range(len(df_filtrado)):
                 id_val = str(df_filtrado.iloc[i]["ID"])
@@ -780,8 +806,9 @@ if tab_option == "Lista de Apontamentos":
                         campo="Status",
                         valor_antes=status_original,
                         valor_depois=status_novo,
-                        responsavel=responsavel_nome,
+                        responsavel_nome=responsavel_nome,
                         when=agora,
+                        responsavel_indicado=None,
                     ))
 
                     # aplica a mudança no df base (session)
@@ -839,30 +866,76 @@ if tab_option == "Lista de Apontamentos":
         # Responsável pela atualização
         colaboradores_eo = colaboradores_df[colaboradores_df["Departamento"] == "Excelência Operacional"]
         resp_opts = ["Selecione um Colaborador"] + colaboradores_eo["Nome Completo do Profissional"].tolist()
+        responsavel_indicado = st.selectbox("Responsável pela Atualização", options=resp_opts, key="responsavel_final")
 
 
         if st.button("Submeter mudanças"):
             responsavel_nome = st.session_state.get("display_name")
+            agora = datetime.now()
+
             if linhas_faltando:
                 st.error("Campos obrigatórios pendentes:\n\n" + "\n".join(linhas_faltando))
                 st.warning("Por favor, selecione um responsável!")
-            else:
-                df.loc[df["ID"].isin(indices_alterados), "Responsável Atualização"] = responsavel_nome
-                df.loc[df["ID"].isin(indices_alterados), "Data Atualização"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.stop()
 
-                rows_to_save = df[df["ID"].isin(indices_alterados)].copy()
+            if responsavel_nome == "Selecione um Colaborador":
+                st.error("Selecione um responsável válido em 'Responsável pela Atualização'.")
+                st.stop()
 
-                # logs preparados no passo 5
-                pending_logs = st.session_state.get("pending_logs", [])
-                df_logs_add = pd.DataFrame(pending_logs) if pending_logs else pd.DataFrame(columns=LOG_COLUMNS)
-                
-                with st.spinner("💾 Salvando apontamento no SharePoint..."):
-                    res = update_sharepoint_workbook(apontamentos_delta=rows_to_save, logs_append=df_logs_add)
-                    if res is not None:
-                        df_atualizado, df_logs_atualizado = res
-                        st.session_state["df_apontamentos"] = df_atualizado
-                        st.session_state["df_logs"] = df_logs_atualizado  # <<< mantém logs atualizados localmente
-                        st.success("✅ Apontamento submetido com sucesso!")
+            # garante coluna
+            if "Responsável Indicado" not in df.columns:
+                df["Responsável Indicado"] = ""
+
+            # IMPORTANTÍSSIMO: normaliza IDs pra string
+            ids_alterados_str = [str(x) for x in indices_alterados]
+
+            pending_logs = st.session_state.get("pending_logs", [])
+            status_original_por_id = st.session_state.get("status_original_por_id", {})
+
+            for id_val in ids_alterados_str:
+                mask_id = df["ID"].astype(str) == id_val
+                if not mask_id.any():
+                    continue
+
+                # valor_antes = status original
+                valor_antes = status_original_por_id.get(str(id_val), "")
+
+                # valor_depois = novo status (já aplicado no passo 5 no df base)
+                status_novo = df.loc[mask_id, "Status"].iloc[0]
+
+
+
+                estudo_da_linha = df.loc[mask_id, "Código do Estudo"].iloc[0]
+
+                pending_logs.append(build_log_rows(
+                    id_apontamento=id_val,
+                    estudo=estudo_da_linha,
+                    operacao="edição",
+                    campo="Status",
+                    valor_antes=valor_antes,          # status original
+                    valor_depois=status_novo,         # novo status
+                    responsavel_nome=responsavel_nome,
+                    when=agora,
+                    responsavel_indicado=responsavel_indicado, # parâmetro separado
+                ))
+
+
+            # auditoria padrão
+            mask_all = df["ID"].astype(str).isin(ids_alterados_str)
+            df.loc[mask_all, "Responsável Atualização"] = responsavel_nome
+            df.loc[mask_all, "Data Atualização"] = agora.strftime("%Y-%m-%d %H:%M:%S")
+
+            rows_to_save = df.loc[mask_all].copy()
+            df_logs_add = pd.DataFrame(pending_logs) if pending_logs else pd.DataFrame(columns=LOG_COLUMNS)
+
+            with st.spinner("💾 Salvando apontamento no SharePoint..."):
+                res = update_sharepoint_workbook(apontamentos_delta=rows_to_save, logs_append=df_logs_add)
+                if res is not None:
+                    df_atualizado, df_logs_atualizado = res
+                    st.session_state["df_apontamentos"] = df_atualizado
+                    st.session_state["df_logs"] = df_logs_atualizado
+                    st.success("✅ Apontamento submetido com sucesso!")
+
 
 
 
