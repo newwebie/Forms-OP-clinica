@@ -700,7 +700,7 @@ if tab_option == "Lista de Apontamentos":
         estudo_sel = st.selectbox("Selecione o Estudo", options=opcoes_estudos, key="filtro_estudo",)
 
     with col_filtro_status:
-        opcoes_status = ["Todos"] + sorted(
+        opcoes_status = ["Todos", "Verificando"] + sorted(
             df["Status"].dropna().unique().tolist()
         )
         status_sel = st.selectbox("Filtrar por Status", options=opcoes_status,key="filtro_status")
