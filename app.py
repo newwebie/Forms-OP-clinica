@@ -960,10 +960,41 @@ if tab_option == "Lista de Apontamentos":
                 with st.spinner("Salvando mudanças..."):
                     df.loc[df["ID"].isin(indices_alterados), "Verificador"] = responsavel
 
-                    # Salva de volta
-                    rows_to_save = df[df["ID"].isin(indices_alterados)]
+                    # Salva apenas as linhas alteradas (a função faz merge com o arquivo existente)
+                    rows_to_save = df[df["ID"].isin(indices_alterados)].copy()
+
+                    # Garante que todas as colunas necessárias existam
+                    colunas_necessarias = [
+                        "ID", "Código do Estudo", "Nome da Pesquisa", "Data do Apontamento",
+                        "Responsável Pelo Apontamento", "Origem Do Apontamento", "Documentos",
+                        "Participante", "Período", "Prazo Para Resolução", "Apontamento",
+                        "Status", "Verificador", "Disponibilizado para Verificação",
+                        "Justificativa", "Responsável Pela Correção", "Data Resolução",
+                        "Plantão", "Departamento", "Tempo de casa", "Responsável Indicado",
+                        "Grau De Criticidade Do Apontamento", "Responsável Atualização",
+                        "Data Atualização", "Data Início Verificação"
+                    ]
+
+                    # Busca dados completos do DataFrame base para as linhas alteradas
+                    df_base = st.session_state["df_apontamentos"]
+                    rows_completas = df_base[df_base["ID"].isin(indices_alterados)].copy()
+
+                    # Atualiza apenas os campos modificados
+                    for id_val in indices_alterados:
+                        mask = rows_completas["ID"] == id_val
+                        rows_completas.loc[mask, "Status"] = df.loc[df["ID"] == id_val, "Status"].iloc[0]
+                        rows_completas.loc[mask, "Verificador"] = responsavel
+                        if "Data Resolução" in df.columns:
+                            val = df.loc[df["ID"] == id_val, "Data Resolução"].iloc[0]
+                            if pd.notna(val):
+                                rows_completas.loc[mask, "Data Resolução"] = val
+                        if "Justificativa" in df.columns:
+                            val = df.loc[df["ID"] == id_val, "Justificativa"].iloc[0]
+                            if pd.notna(val) and str(val).strip():
+                                rows_completas.loc[mask, "Justificativa"] = val
+
                     df_atualizado = update_sharepoint_file(
-                        rows_to_save,
+                        rows_completas,
                         usuario=responsavel,
                         operacao="ATUALIZAR_STATUS",
                         responsavel_indicado=responsavel
