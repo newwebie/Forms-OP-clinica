@@ -734,7 +734,13 @@ if tab_option == "Formulário":
                         "Data Resolução": resolucao,
                         "Plantão": plantao,
                         "Departamento": departamento,
-                        "Tempo de casa": status_prof
+                        "Tempo de casa": status_prof,
+                        # Colunas de controle (preenchidas posteriormente)
+                        "Responsável Indicado": "",
+                        "Grau De Criticidade Do Apontamento": "",
+                        "Responsável Atualização": "",
+                        "Data Atualização": None,
+                        "Data Início Verificação": None
                     }
                     
     
