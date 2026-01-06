@@ -5,6 +5,11 @@ import io
 import time
 import random
 import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 # >>> usa o conector (precisa do arquivo sp_connector.py no repo)
 from sp_connector import SPConnector
@@ -27,9 +32,16 @@ HOSTNAME = st.secrets["graph"]["hostname"]
 SITE_PATH = st.secrets["graph"]["site_path"]        
 LIBRARY   = st.secrets["graph"]["library_name"]     
 
-APONTAMENTOS  = st.secrets["files"]["apontamentos"]   
-ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]    
+APONTAMENTOS  = st.secrets["files"]["apontamentos"]
+ESTUDOS_CSV   = st.secrets["files"]["estudos_csv"]
 COLABORADORES = st.secrets["files"]["colaboradores"]  # 'SANDRA/PROJETO_DASHBOARD/base_cargo.xlsx'
+
+# Configurações de email para alertas
+EMAIL_SMTP_SERVER = st.secrets.get("email", {}).get("smtp_server", "smtp.office365.com")
+EMAIL_SMTP_PORT = st.secrets.get("email", {}).get("smtp_port", 587)
+EMAIL_SENDER = st.secrets.get("email", {}).get("sender", "")
+EMAIL_PASSWORD = st.secrets.get("email", {}).get("password", "")
+EMAIL_ALERTS = ["susanna.bernardes@synvia.com", "washington.gouvea@synvia.com"]
 
 # Instância única do conector (cacheada)
 @st.cache_resource
@@ -39,11 +51,90 @@ def _sp():
         hostname=HOSTNAME, site_path=SITE_PATH, library_name=LIBRARY
     )
 
+# ============================================================
+# SISTEMA DE LOGGING E MONITORAMENTO
+# ============================================================
+
+
+def enviar_email_alerta(assunto: str, corpo: str, anexos: list = None):
+    """Envia email de alerta para os responsáveis"""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        st.warning("Configurações de email não definidas nos secrets. Email não enviado.")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = ", ".join(EMAIL_ALERTS)
+        msg['Subject'] = assunto
+
+        msg.attach(MIMEText(corpo, 'html'))
+
+        # Adiciona anexos se houver
+        if anexos:
+            for nome_arquivo, dados in anexos:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(dados)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename={nome_arquivo}')
+                msg.attach(part)
+
+        # Envia o email
+        with smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        return True
+    except Exception as e:
+        st.error(f"Erro ao enviar email: {e}")
+        return False
+
+def verificar_diminuicao_dados(df_novo: pd.DataFrame, sheet_name: str = "apontamentos") -> tuple[bool, int, int]:
+    """
+    Verifica se o número de linhas diminuiu em relação ao último arquivo salvo
+    Retorna: (diminuiu: bool, linhas_antes: int, linhas_depois: int)
+    """
+    try:
+        # Carrega o arquivo atual do SharePoint
+        data = _sp().download(APONTAMENTOS)
+        xls = pd.ExcelFile(io.BytesIO(data))
+
+        if sheet_name in xls.sheet_names:
+            df_atual = pd.read_excel(xls, sheet_name=sheet_name)
+            linhas_antes = len(df_atual)
+            linhas_depois = len(df_novo)
+
+            return (linhas_depois < linhas_antes, linhas_antes, linhas_depois)
+    except:
+        pass
+
+    return (False, 0, len(df_novo))
+
+def criar_backup_dataframe(df: pd.DataFrame) -> bytes:
+    """Cria um backup do DataFrame em formato Excel"""
+    output = io.BytesIO()
+    df.to_excel(output, index=False, sheet_name="backup")
+    output.seek(0)
+    return output.getvalue()
+
 # Função para ler o arquivo Excel (Apontamentos) do SharePoint com cache
 @st.cache_data
-def get_sharepoint_file():
+def get_sharepoint_file(sheet_name: str = "apontamentos"):
+    """
+    Lê o arquivo Excel do SharePoint que contém múltiplas sheets:
+    - 'apontamentos': dados principais
+    - 'log': histórico de operações
+    """
     try:
-        return _sp().read_excel(APONTAMENTOS)
+        data = _sp().download(APONTAMENTOS)
+        xls = pd.ExcelFile(io.BytesIO(data))
+
+        if sheet_name in xls.sheet_names:
+            return pd.read_excel(xls, sheet_name=sheet_name)
+        else:
+            # Se a sheet não existir, retorna DataFrame vazio
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo no SharePoint (Graph): {e}")
         return pd.DataFrame()
@@ -81,21 +172,40 @@ def generate_custom_id(existing_ids: set[str]) -> str:
         
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
+def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = "ATUALIZAÇÃO", responsavel_indicado: str = "") -> pd.DataFrame | None:
     """
-    Atualiza o arquivo Excel no SharePoint de forma segura, prevenindo sobrescrita de dados.
+    Atualiza o arquivo Excel no SharePoint de forma segura, com logging e monitoramento.
 
     Estratégia:
-    1. Carrega a versão mais recente do arquivo
+    1. Carrega a versão mais recente do arquivo (ambas sheets: apontamentos e log)
     2. Para linhas existentes: atualiza APENAS as colunas que foram modificadas
     3. Para linhas novas: adiciona ao final
-    4. Tenta novamente em caso de conflito de versão
+    4. Registra operação no log
+    5. Verifica diminuição de dados e dispara alerta se necessário
+    6. Salva arquivo com ambas as sheets
+    7. Tenta novamente em caso de conflito de versão
     """
     attempts = 0
     while True:
         try:
             # Carrega versão mais recente do arquivo
-            base_df = _sp().read_excel(APONTAMENTOS)
+            data = _sp().download(APONTAMENTOS)
+            xls = pd.ExcelFile(io.BytesIO(data))
+
+            # Carrega sheet de apontamentos
+            if "apontamentos" in xls.sheet_names:
+                base_df = pd.read_excel(xls, sheet_name="apontamentos")
+            else:
+                base_df = pd.DataFrame()
+
+            # Carrega sheet de log (ou cria vazio)
+            if "log" in xls.sheet_names:
+                log_df = pd.read_excel(xls, sheet_name="log")
+                # Adiciona coluna "Responsável Indicado" se não existir
+                if "Responsável Indicado" not in log_df.columns:
+                    log_df["Responsável Indicado"] = ""
+            else:
+                log_df = pd.DataFrame(columns=["Data", "ID", "Estudo", "Operação", "Campo", "Valor Anterior", "Valor Depois", "Responsável", "Responsável Indicado"])
 
             df_to_save = df.copy()
             if "ID" not in df_to_save.columns:
@@ -103,6 +213,10 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
                 return None
 
             df_to_save["ID"] = df_to_save["ID"].astype(str)
+
+            # Variáveis para logging
+            ids_novos = []
+            ids_atualizados = []
 
             if not base_df.empty:
                 base_df["ID"] = base_df["ID"].astype(str)
@@ -118,6 +232,7 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
                 if new_ids:
                     new_rows = df_to_save[df_to_save["ID"].isin(new_ids)]
                     base_df = pd.concat([base_df, new_rows], ignore_index=True)
+                    ids_novos = list(new_ids)
 
                 # Atualiza registros existentes coluna por coluna
                 for id_val in update_ids:
@@ -132,14 +247,148 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
                         for col in df_to_save.columns:
                             if col in base_df.columns:
                                 base_df.at[idx_b, col] = df_to_save.at[idx_u, col]
+                        ids_atualizados.append(id_val)
             else:
                 # Se o arquivo está vazio, salva tudo
                 base_df = df_to_save.copy()
+                ids_novos = df_to_save["ID"].tolist()
 
-            # Salva o arquivo atualizado
+            # === ADICIONA ENTRADAS NO LOG ===
+            # Para cada ID criado, adiciona uma entrada no log
+            for id_val in ids_novos:
+                # Pega o estudo do apontamento
+                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+                status_novo = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else "PENDENTE"
+
+                # Pega o responsável pela correção do apontamento
+                resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
+
+                nova_log_entry = pd.DataFrame([{
+                    "Data": datetime.now(),
+                    "ID": id_val,
+                    "Estudo": estudo,
+                    "Operação": "edição",
+                    "Campo": "Status",
+                    "Valor Anterior": "",
+                    "Valor Depois": status_novo,
+                    "Responsável": usuario if usuario else "Sistema",
+                    "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
+                }])
+                log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
+
+            # Para cada ID atualizado, adiciona uma entrada no log
+            for id_val in ids_atualizados:
+                # Pega valores antigos e novos
+                valor_anterior = base_df.loc[base_df["ID"] == id_val, "Status"].iloc[0] if "Status" in base_df.columns else ""
+                valor_depois = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else ""
+                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+
+                # Só registra se houver mudança
+                if valor_anterior != valor_depois:
+                    # Pega o responsável pela correção do apontamento
+                    resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
+
+                    nova_log_entry = pd.DataFrame([{
+                        "Data": datetime.now(),
+                        "ID": id_val,
+                        "Estudo": estudo,
+                        "Operação": "edição",
+                        "Campo": "Status",
+                        "Valor Anterior": valor_anterior,
+                        "Valor Depois": valor_depois,
+                        "Responsável": usuario if usuario else "Sistema",
+                        "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
+                    }])
+                    log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
+
+            # === VERIFICA DIMINUIÇÃO DE DADOS ===
+            diminuiu, linhas_antes, linhas_depois = verificar_diminuicao_dados(base_df, "apontamentos")
+
+            if diminuiu:
+                # Cria backup do DataFrame anterior
+                try:
+                    df_anterior = pd.read_excel(xls, sheet_name="apontamentos")
+                    backup_bytes = criar_backup_dataframe(df_anterior)
+
+                    # Pega últimos 10 logs
+                    ultimos_logs = log_df.tail(10).to_html(index=False)
+
+                    # Monta email de alerta
+                    assunto = f"⚠️ ALERTA: Diminuição de Dados Detectada - Sistema de Apontamentos"
+                    corpo = f"""
+                    <html>
+                    <body>
+                        <h2 style="color: #d9534f;">Alerta de Diminuição de Dados</h2>
+                        <p>O sistema detectou uma diminuição no número de registros do arquivo de apontamentos.</p>
+
+                        <h3>Detalhes:</h3>
+                        <ul>
+                            <li><strong>Linhas antes:</strong> {linhas_antes}</li>
+                            <li><strong>Linhas depois:</strong> {linhas_depois}</li>
+                            <li><strong>Diferença:</strong> {linhas_antes - linhas_depois} linhas removidas</li>
+                            <li><strong>Data/Hora:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</li>
+                            <li><strong>Usuário:</strong> {usuario if usuario else "Sistema"}</li>
+                            <li><strong>Operação:</strong> {operacao}</li>
+                        </ul>
+
+                        <h3>Últimos Logs:</h3>
+                        {ultimos_logs}
+
+                        <p style="margin-top: 20px;">
+                            <strong>ATENÇÃO:</strong> Um backup do DataFrame anterior está anexado a este email.
+                        </p>
+
+                        <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                            Este é um email automático do Sistema de Apontamentos.<br>
+                            Em caso de dúvidas, entre em contato com a equipe de TI.
+                        </p>
+                    </body>
+                    </html>
+                    """
+
+                    anexos = [
+                        (f"backup_apontamentos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx", backup_bytes)
+                    ]
+
+                    # Adiciona log de alerta enviado
+                    log_alerta = pd.DataFrame([{
+                        "Data": datetime.now(),
+                        "ID": "",
+                        "Estudo": "",
+                        "Operação": "ALERTA_EMAIL",
+                        "Campo": "Sistema",
+                        "Valor Anterior": str(linhas_antes),
+                        "Valor Depois": str(linhas_depois),
+                        "Responsável": "Sistema",
+                        "Responsável Indicado": ""
+                    }])
+                    log_df = pd.concat([log_alerta, log_df], ignore_index=True)
+
+                    # Envia email (em background, não bloqueia)
+                    enviar_email_alerta(assunto, corpo, anexos)
+
+                except Exception as e_email:
+                    # Log de erro no envio de email
+                    log_erro = pd.DataFrame([{
+                        "Data": datetime.now(),
+                        "ID": "",
+                        "Estudo": "",
+                        "Operação": "ALERTA_EMAIL",
+                        "Campo": "Sistema",
+                        "Valor Anterior": "",
+                        "Valor Depois": "",
+                        "Responsável": "Sistema",
+                        "Responsável Indicado": ""
+                    }])
+                    log_df = pd.concat([log_erro, log_df], ignore_index=True)
+
+            # === SALVA O ARQUIVO COM MÚLTIPLAS SHEETS ===
             output = io.BytesIO()
-            base_df.to_excel(output, index=False)
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                base_df.to_excel(writer, sheet_name='apontamentos', index=False)
+                log_df.to_excel(writer, sheet_name='log', index=False)
             output.seek(0)
+
             _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
 
             st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
@@ -148,11 +397,31 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
         except Exception as e:
             attempts += 1
             msg = str(e)
+
+            # Adiciona log de erro
+            try:
+                log_erro = pd.DataFrame([{
+                    "Data": datetime.now(),
+                    "ID": "",
+                    "Estudo": "",
+                    "Operação": operacao,
+                    "Campo": "Sistema",
+                    "Valor Anterior": "",
+                    "Valor Depois": "",
+                    "Responsável": usuario if usuario else "Sistema",
+                    "Responsável Indicado": ""
+                }])
+                if 'log_df' in locals():
+                    log_df = pd.concat([log_erro, log_df], ignore_index=True)
+            except:
+                pass
+
             # 409/412 = conflito de versão | 429 = throttling
             if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
                 st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
+
             st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
             return None
 
@@ -179,13 +448,15 @@ st.session_state["user_email"] = user_email
 
 
 # Carregar dados iniciais
-df_study = get_sharepoint_file_estudos_csv()
-colaboradores_df = colaboradores_excel()
+with st.spinner("Carregando dados do SharePoint..."):
+    df_study = get_sharepoint_file_estudos_csv()
+    colaboradores_df = colaboradores_excel()
 
 
 # Inicializar o DataFrame de apontamentos no session_state
 if "df_apontamentos" not in st.session_state:
-    df_loaded = get_sharepoint_file()
+    with st.spinner("Carregando apontamentos..."):
+        df_loaded = get_sharepoint_file()
     
     # Fill missing or invalid IDs to prevent NaN issues
     if not df_loaded.empty:
@@ -410,9 +681,9 @@ if tab_option == "Formulário":
             verificador_data = None
             justificativa = "N/A"
             resolucao = None
-        
+
         submit = st.button("Enviar")
-        
+
         if submit:
             # Validação dos campos obrigatórios
             if selected_protocol == "Digite o codigo do estudo" or participante.strip() == "" or apontamento.strip() == "":
@@ -428,52 +699,57 @@ if tab_option == "Formulário":
                 st.warning("Por favor, selecione o colaborador responsável pela correção antes de salvar.")
                 st.stop()
             else:
-                data_atual = datetime.now()
+                with st.spinner("Salvando apontamento..."):
+                    data_atual = datetime.now()
 
-                if st.session_state["status"] == "REALIZADO DURANTE A CONDUÇÃO":
-                    resolucao = data_atual
-                
-                df = st.session_state["df_apontamentos"]
-
-                # Usa o ID gerado previamente para este apontamento
-                next_id = st.session_state.get("generated_id")
-
-                responsavel_nome = st.session_state.get("display_name")
-                
-                
-
-                novo_apontamento = {
-                    "ID": next_id,
-                    "Código do Estudo": selected_protocol,
-                    "Nome da Pesquisa": research_name,
-                    "Data do Apontamento": data_atual,
-                    "Responsável Pelo Apontamento": responsavel_nome,
-                    "Origem Do Apontamento": st.session_state["origem"],
-                    "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
-                    "Participante": pp_final,
-                    "Período": st.session_state["periodo"],
-                    "Prazo Para Resolução": st.session_state["prazo"],
-                    "Apontamento": st.session_state["apontamento"],
-                    "Status": st.session_state["status"],
-                    "Verificador": st.session_state.get("verificador_nome", ""),
-                    "Disponibilizado para Verificação": st.session_state.get("verificador_data", None),
-                    "Justificativa": st.session_state.get("justificativa", ""),
-                    "Responsável Pela Correção": correcao,
-                    "Data Resolução": resolucao,
-                    "Plantão": plantao,
-                    "Departamento": departamento,
-                    "Tempo de casa": status_prof
-                }
-                
-
-
-                novo_df = pd.DataFrame([novo_apontamento])
-                df_atualizado = update_sharepoint_file(novo_df)
-                if df_atualizado is not None:
-                    st.session_state["df_apontamentos"] = df_atualizado
-                    st.session_state["generated_id"] = generate_custom_id(
-                        set(df_atualizado["ID"].astype(str))
+                    if st.session_state["status"] == "REALIZADO DURANTE A CONDUÇÃO":
+                        resolucao = data_atual
+                    
+                    df = st.session_state["df_apontamentos"]
+    
+                    # Usa o ID gerado previamente para este apontamento
+                    next_id = st.session_state.get("generated_id")
+    
+                    responsavel_nome = st.session_state.get("display_name")
+                    
+                    
+    
+                    novo_apontamento = {
+                        "ID": next_id,
+                        "Código do Estudo": selected_protocol,
+                        "Nome da Pesquisa": research_name,
+                        "Data do Apontamento": data_atual,
+                        "Responsável Pelo Apontamento": responsavel_nome,
+                        "Origem Do Apontamento": st.session_state["origem"],
+                        "Documentos": documento_final,  # Aqui utiliza o valor final (customizado se "Outros")
+                        "Participante": pp_final,
+                        "Período": st.session_state["periodo"],
+                        "Prazo Para Resolução": st.session_state["prazo"],
+                        "Apontamento": st.session_state["apontamento"],
+                        "Status": st.session_state["status"],
+                        "Verificador": st.session_state.get("verificador_nome", ""),
+                        "Disponibilizado para Verificação": st.session_state.get("verificador_data", None),
+                        "Justificativa": st.session_state.get("justificativa", ""),
+                        "Responsável Pela Correção": correcao,
+                        "Data Resolução": resolucao,
+                        "Plantão": plantao,
+                        "Departamento": departamento,
+                        "Tempo de casa": status_prof
+                    }
+                    
+    
+    
+                    novo_df = pd.DataFrame([novo_apontamento])
+                    df_atualizado = update_sharepoint_file(
+                        novo_df,
+                        usuario=display_name,
+                        operacao="CRIAR_APONTAMENTO"
                     )
+                    if df_atualizado is not None:
+                        st.session_state["df_apontamentos"] = df_atualizado
+                        st.session_state["generated_id"] = generate_custom_id(
+                            set(df_atualizado["ID"].astype(str))
+                        )
                 
 
 
@@ -675,15 +951,21 @@ if tab_option == "Lista de Apontamentos":
             elif responsavel == "Selecione um Colaborador":
                 st.warning("Por favor, selecione um responsável!")
             else:
-                df.loc[df["ID"].isin(indices_alterados), "Verificador"] = responsavel
+                with st.spinner("Salvando mudanças..."):
+                    df.loc[df["ID"].isin(indices_alterados), "Verificador"] = responsavel
 
-                # Salva de volta
-                rows_to_save = df[df["ID"].isin(indices_alterados)]
-                df_atualizado = update_sharepoint_file(rows_to_save)
-                if df_atualizado is not None:
-                    st.session_state["df_apontamentos"] = df_atualizado
+                    # Salva de volta
+                    rows_to_save = df[df["ID"].isin(indices_alterados)]
+                    df_atualizado = update_sharepoint_file(
+                        rows_to_save,
+                        usuario=responsavel,
+                        operacao="ATUALIZAR_STATUS",
+                        responsavel_indicado=responsavel
+                    )
+                    if df_atualizado is not None:
+                        st.session_state["df_apontamentos"] = df_atualizado
 
-                # Limpa estados
-                st.session_state.mostrar_campos_finais = False
-                st.session_state.indices_alterados = []
-                st.session_state.df_atualizado = None
+                    # Limpa estados
+                    st.session_state.mostrar_campos_finais = False
+                    st.session_state.indices_alterados = []
+                    st.session_state.df_atualizado = None
