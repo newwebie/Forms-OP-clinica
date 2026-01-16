@@ -97,6 +97,9 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
     5. Tenta novamente em caso de conflito de versão
     """
     attempts = 0
+    max_attempts = 5
+    ids_being_saved = []  # Para log de debug
+
     while True:
         try:
             # Carrega versão mais recente do arquivo
@@ -105,13 +108,22 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
 
             df_to_save = df.copy()
             if "ID" not in df_to_save.columns:
-                st.error("DataFrame sem coluna ID!")
+                st.error("❌ ERRO CRÍTICO: DataFrame sem coluna ID! Os dados NÃO foram salvos.")
                 return None
 
-            df_to_save["ID"] = df_to_save["ID"].astype(str)
+            # Normaliza IDs removendo espaços em branco
+            df_to_save["ID"] = df_to_save["ID"].astype(str).str.strip()
+            ids_being_saved = df_to_save["ID"].tolist()  # Guarda para log
+
+            # Log para debug (só na primeira tentativa)
+            if attempts == 0:
+                with st.expander("🔍 Detalhes técnicos do salvamento (clique para ver)"):
+                    st.text(f"IDs sendo salvos: {', '.join(ids_being_saved)}")
+                    st.text(f"Total de registros no arquivo atual: {len(base_df)}")
+                    st.text(f"Registros a serem salvos: {len(df_to_save)}")
 
             if not base_df.empty:
-                base_df["ID"] = base_df["ID"].astype(str)
+                base_df["ID"] = base_df["ID"].astype(str).str.strip()
 
                 # Separa registros novos dos existentes
                 ids_to_save = set(df_to_save["ID"].tolist())
@@ -137,12 +149,17 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
                         # Atualiza apenas as colunas que existem em ambos
                         for col in df_to_save.columns:
                             if col in base_df.columns:
-                                new_value = df_to_save.at[idx_u, col]
-                                # Garante que valores vazios, None ou NaN sejam preservados corretamente
-                                if pd.isna(new_value):
-                                    base_df.at[idx_b, col] = None
-                                else:
-                                    base_df.at[idx_b, col] = new_value
+                                try:
+                                    new_value = df_to_save.at[idx_u, col]
+                                    # Garante que valores vazios, None ou NaN sejam preservados corretamente
+                                    if pd.isna(new_value):
+                                        base_df.at[idx_b, col] = None
+                                    else:
+                                        base_df.at[idx_b, col] = new_value
+                                except Exception as col_error:
+                                    # Se houver erro ao atualizar uma coluna específica, loga mas continua
+                                    st.warning(f"⚠️ Erro ao atualizar coluna '{col}' para ID {id_val}: {str(col_error)}")
+                                    continue
             else:
                 # Se o arquivo está vazio, salva tudo
                 base_df = df_to_save.copy()
@@ -152,12 +169,40 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
             base_df.to_excel(output, index=False)
             output.seek(0)
 
-            _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
+            # Tenta fazer o upload
+            try:
+                _sp().upload_small(APONTAMENTOS, output.getvalue(), overwrite=True)
+            except Exception as upload_error:
+                # Se falhar no upload, não limpa cache e relança a exceção
+                raise upload_error
 
-            # Limpa o cache para forçar o recarregamento dos dados do SharePoint
+            # === VALIDAÇÃO PÓS-SALVAMENTO ===
+            # Aguarda 2 segundos para garantir que o SharePoint processou o arquivo
+            time.sleep(2)
+
+            try:
+                # Tenta ler o arquivo novamente para confirmar que foi salvo
+                verification_data = _sp().download(APONTAMENTOS)
+                verification_df = pd.read_excel(io.BytesIO(verification_data))
+
+                # Verifica se os IDs que tentamos salvar existem no arquivo
+                verification_df["ID"] = verification_df["ID"].astype(str).str.strip()
+                saved_ids = set(verification_df["ID"].tolist())
+                expected_ids = set(df_to_save["ID"].tolist())
+
+                missing_ids = expected_ids - saved_ids
+                if missing_ids:
+                    st.warning(f"⚠️ ATENÇÃO: Alguns IDs podem não ter sido salvos corretamente: {', '.join(missing_ids)}")
+                    st.info("Os dados foram enviados ao SharePoint, mas a verificação encontrou inconsistências. Por favor, recarregue a página e verifique.")
+
+            except Exception as verify_error:
+                # Se a verificação falhar, não bloqueia o sucesso (o upload já foi feito)
+                st.warning(f"⚠️ Dados enviados ao SharePoint, mas não foi possível verificar. Por favor, recarregue a página para confirmar.")
+
+            # Limpa o cache SOMENTE após upload bem-sucedido
             st.cache_data.clear()
 
-            st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
+            st.success("✅ Mudanças salvas com sucesso no SharePoint!")
             return base_df
 
         except Exception as e:
@@ -165,12 +210,27 @@ def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
             msg = str(e)
 
             # 409/412 = conflito de versão | 429 = throttling
-            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
-                st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
+            if any(x in msg for x in ["409", "412", "429"]) and attempts < max_attempts:
+                tentativas_restantes = max_attempts - attempts
+                st.warning(f"⚠️ Conflito detectado (outra pessoa salvando ou limite de API). Tentativa {attempts}/{max_attempts}... Aguardando 5 segundos.")
                 time.sleep(5)
                 continue
 
-            st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
+            # Se esgotou as tentativas ou é outro tipo de erro
+            if attempts >= max_attempts:
+                st.error(f"❌ FALHA AO SALVAR: Máximo de tentativas atingido ({max_attempts}). Os dados NÃO foram salvos no SharePoint!")
+                with st.expander("📋 Informações para o suporte técnico"):
+                    st.text(f"Erro: {msg}")
+                    st.text(f"IDs tentados: {', '.join(ids_being_saved) if ids_being_saved else 'N/A'}")
+                    st.text(f"Tentativas: {attempts}")
+                    st.text(f"Horário: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                st.error(f"❌ ERRO AO SALVAR NO SHAREPOINT: {msg}\n\nOs dados NÃO foram salvos. Por favor, tente novamente ou contate o suporte.")
+                with st.expander("📋 Detalhes do erro"):
+                    st.text(f"Tipo de erro: {type(e).__name__}")
+                    st.text(f"Mensagem: {msg}")
+                    st.text(f"IDs tentados: {', '.join(ids_being_saved) if ids_being_saved else 'N/A'}")
+
             return None
 
 
@@ -495,13 +555,19 @@ if tab_option == "Formulário":
     
                     novo_df = pd.DataFrame([novo_apontamento])
                     df_atualizado = update_sharepoint_file(novo_df)
+
                     if df_atualizado is not None:
+                        # Salvamento bem-sucedido
                         st.session_state["df_apontamentos"] = df_atualizado
                         st.session_state["generated_id"] = generate_custom_id(
                             set(df_atualizado["ID"].astype(str))
                         )
                         # Força recarregamento para exibir os dados atualizados
                         st.rerun()
+                    else:
+                        # Salvamento falhou
+                        st.error("⚠️ O apontamento NÃO foi salvo no SharePoint. Por favor, tente novamente.")
+                        st.info("💡 Seus dados ainda estão preenchidos no formulário. Você pode clicar em 'Enviar' novamente.")
                 
 
 
@@ -740,13 +806,19 @@ if tab_option == "Lista de Apontamentos":
                                 rows_completas.loc[mask, "Justificativa"] = val
 
                     df_atualizado = update_sharepoint_file(rows_completas)
+
                     if df_atualizado is not None:
+                        # Salvamento bem-sucedido
                         st.session_state["df_apontamentos"] = df_atualizado
 
-                    # Limpa estados
-                    st.session_state.mostrar_campos_finais = False
-                    st.session_state.indices_alterados = []
-                    st.session_state.df_atualizado = None
+                        # Limpa estados
+                        st.session_state.mostrar_campos_finais = False
+                        st.session_state.indices_alterados = []
+                        st.session_state.df_atualizado = None
 
-                    # Força recarregamento da página para mostrar dados atualizados
-                    st.rerun()
+                        # Força recarregamento da página para mostrar dados atualizados
+                        st.rerun()
+                    else:
+                        # Salvamento falhou - mantém os estados para o usuário tentar novamente
+                        st.error("⚠️ As alterações NÃO foram salvas. Por favor, revise os dados e tente novamente.")
+                        st.info("💡 Dica: Clique no botão '🔄 Atualizar' no topo da página para recarregar os dados originais.")
