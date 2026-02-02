@@ -39,6 +39,133 @@ def _sp():
         hostname=HOSTNAME, site_path=SITE_PATH, library_name=LIBRARY
     )
 
+
+# --------------------------------------------------------------------
+# Funções de Migração
+# --------------------------------------------------------------------
+def show_migration_blocked_page():
+    """Página de bloqueio com redirecionamento automático para o novo sistema."""
+    st.markdown("""
+    <style>
+    .migration-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 80vh;
+        text-align: center;
+        padding: 40px;
+    }
+    .migration-title {
+        font-size: 2.5em;
+        color: #1f77b4;
+        margin-bottom: 20px;
+    }
+    .migration-message {
+        font-size: 1.3em;
+        margin-bottom: 30px;
+        line-height: 1.6;
+    }
+    .migration-link {
+        font-size: 1.5em;
+        color: #0066cc;
+        text-decoration: none;
+        padding: 15px 30px;
+        background: #e6f3ff;
+        border-radius: 8px;
+        border: 2px solid #0066cc;
+        display: inline-block;
+        margin-top: 20px;
+    }
+    </style>
+
+    <div class="migration-container">
+        <div class="migration-title">🔄 Sistema Migrado</div>
+        <div class="migration-message">
+            A partir de <strong>02/02/2026</strong>, o acesso ao painel de apontamentos<br>
+            é feito exclusivamente através do novo sistema:<br><br>
+            <a href="https://opclinica.vercel.app/" class="migration-link" target="_self">
+                🚀 https://opclinica.vercel.app/
+            </a>
+            <br><br>
+            <em>Você será redirecionado automaticamente em <span id="countdown">5</span> segundos...</em>
+        </div>
+    </div>
+
+    <script>
+    let seconds = 5;
+    const countdown = setInterval(() => {
+        seconds--;
+        document.getElementById('countdown').textContent = seconds;
+        if (seconds <= 0) {
+            clearInterval(countdown);
+            window.location.href = 'https://opclinica.vercel.app/';
+        }
+    }, 1000);
+    </script>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+
+def show_migration_warning(days_remaining):
+    """Aviso antecipado de migração (permite continuar usando o sistema)."""
+    st.warning(f"""
+    ### 📢 Aviso Importante - Migração de Sistema
+
+    Este sistema será **desativado em {days_remaining} dias** (a partir de **02/02/2026**).
+
+    ➡️ **Novo sistema disponível em:** [https://opclinica.vercel.app/](https://opclinica.vercel.app/)
+
+    Por favor, faça a transição para o novo sistema o quanto antes.
+    """)
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("🚀 Ir para novo sistema agora"):
+            st.markdown('<meta http-equiv="refresh" content="0;url=https://opclinica.vercel.app/">',
+                       unsafe_allow_html=True)
+            st.stop()
+    with col2:
+        st.info("Você ainda pode continuar usando este sistema até 01/02/2026.")
+
+
+def check_migration_notice():
+    """
+    Verifica se deve mostrar aviso de migração ou bloquear acesso.
+
+    Comportamento:
+    - Antes de 26/01/2026: Sem aviso, acesso normal
+    - Entre 26/01 e 01/02/2026: Aviso mas permite continuar
+    - A partir de 02/02/2026: Bloqueia e redireciona automaticamente
+    - Bypass: variável de ambiente ADMIN_BYPASS=true
+
+    Returns:
+        bool: True se bloqueado (st.stop() já foi chamado), False se pode continuar
+    """
+    import os
+    from datetime import datetime
+
+    # Bypass para administradores
+    if os.getenv("ADMIN_BYPASS", "").lower() == "true":
+        st.warning("⚠️ Modo administrador ativo (ADMIN_BYPASS)")
+        return False
+
+    cutoff_date = datetime(2026, 2, 2)
+    warning_start = datetime(2026, 1, 26)  # 1 semana antes
+    now = datetime.now()
+
+    if now >= cutoff_date:
+        # BLOQUEIO TOTAL - Redirecionar automaticamente
+        show_migration_blocked_page()
+        return True
+    elif now >= warning_start:
+        # AVISO ANTECIPADO - Permitir continuar
+        show_migration_warning(days_remaining=(cutoff_date - now).days)
+        return False
+
+    return False
+
+
 # Função para ler o arquivo Excel (Apontamentos) do SharePoint com cache
 @st.cache_data
 def get_sharepoint_file():
@@ -245,6 +372,10 @@ if not logged_in:
 # Garantir token válido durante a sessão
 AuthManager.check_and_refresh_token(auth)
 create_user_header()
+
+# Verificação de migração - bloqueia acesso se necessário
+if check_migration_notice():
+    st.stop()
 
 user = AuthManager.get_current_user() or {}
 display_name = user.get("displayName", "Usuário")
